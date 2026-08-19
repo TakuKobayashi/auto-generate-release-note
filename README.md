@@ -1,5 +1,7 @@
 # Ollama AI Release Notes
 
+[![CI](https://github.com/TakuKobayashi/auto-generate-release-note/actions/workflows/ci.yml/badge.svg)](https://github.com/TakuKobayashi/auto-generate-release-note/actions/workflows/ci.yml)
+
 Gitのコミット履歴と差分をローカルの[Ollama](https://ollama.com/)で要約し、GitHub Releaseを自動作成・更新するGitHub Actionです。ソースコードの差分を外部のLLM APIへ送らずにリリースノートを生成できます。
 
 ## 特長
@@ -102,7 +104,7 @@ jobs:
 
 ## ローカルでプレビューする
 
-Node.js 22以降、Git、Ollamaを用意し、対象リポジトリのルートで実行します。
+Node.js、Git、Ollamaを用意し、対象リポジトリのルートで実行します。
 
 ```powershell
 ollama pull qwen2.5-coder:7b-instruct

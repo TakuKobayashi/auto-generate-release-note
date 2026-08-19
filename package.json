@@ -4,9 +4,6 @@
   "private": true,
   "description": "Generate GitHub release notes from Git history with Ollama",
   "type": "module",
-  "engines": {
-    "node": ">=22"
-  },
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js",
     "check": "tsc --noEmit",
