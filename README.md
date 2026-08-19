@@ -133,10 +133,12 @@ npm run verify
 
 1. このリポジトリをGitHub上でPublicにします。
 2. 変更をmainブランチへpushします。
-3. `v1.0.0` のようなタグを作成してpushします。
-4. GitHubのReleasesで新しいReleaseを作成し、**Publish this Action to the GitHub Marketplace** を選択します。
-5. カテゴリ（例: Utilities）を選び、Releaseを公開します。初回はMarketplace Developer Agreementへの同意と2要素認証が必要です。
-6. 利用者が `@v1` で互換性のある最新版を使えるよう、`v1` タグも同じコミットへ作成・更新します。
+3. `v1`、`v1.0.0` のようなタグを作成してpushします。
+4. Releaseワークフローがフォーマット、型、ビルド、spec、配布ファイルを検証し、GitHub Releaseを自動作成します。タグをpushした時点で `TakuKobayashi/auto-generate-release-note@v1` のように利用できます。
+5. Marketplaceへ初めて掲載するときだけ、作成されたReleaseをGitHub上で編集し、**Publish this Action to the GitHub Marketplace** を選択します。
+6. カテゴリ（例: Utilities）を選んで更新します。初回はMarketplace Developer Agreementへの同意と2要素認証が必要です。
+
+GitHubの公開APIにはMarketplace掲載チェックを設定する項目がないため、手順5〜6のみ画面上での操作が必要です。GitHub Releaseの作成と、それ以降のAction配布は自動化されています。
 
 ```bash
 git tag -a v1.0.0 -m "v1.0.0"
