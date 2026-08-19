@@ -619,7 +619,9 @@ async function generateWithModel(
     });
   }
   if (!notes) throw new Error('Ollama returned an empty response');
-  console.log(`Ollama generated ${notes.length} release-note characters in ${Date.now() - startedAt}ms`);
+  console.log(
+    `Ollama generated ${notes.length} release-note characters in ${Date.now() - startedAt}ms`
+  );
   return notes;
 }
 

@@ -650,7 +650,9 @@ ${sourceMaterial}`
     });
   }
   if (!notes2) throw new Error("Ollama returned an empty response");
-  console.log(`Ollama generated ${notes2.length} release-note characters in ${Date.now() - startedAt}ms`);
+  console.log(
+    `Ollama generated ${notes2.length} release-note characters in ${Date.now() - startedAt}ms`
+  );
   return notes2;
 }
 if (!dryRun) git("fetch", "--force", "--tags", "--prune", "origin");

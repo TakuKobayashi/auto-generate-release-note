@@ -5,18 +5,24 @@
   "description": "Generate GitHub release notes from Git history with Ollama",
   "type": "module",
   "engines": {
-    "node": ">=24"
+    "node": ">=22"
   },
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/index.js",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js",
     "check": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "tsx --test test/*.spec.ts",
-    "verify": "npm run check && npm run build && npm test"
+    "verify": "npm run format:check && npm run check && npm run build && npm test"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.2",
+    "prettier": "^3.9.6",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
   }
 }

@@ -69,28 +69,28 @@ jobs:
 
 ## Inputs
 
-| 名前 | 必須 | 既定値 | 説明 |
-| --- | --- | --- | --- |
-| `github-token` | はい | - | `contents: write` 権限を持つtoken。通常は `${{ github.token }}`。 |
-| `tag` | いいえ | `${{ github.ref_name }}` | Releaseの対象タグ。 |
-| `model` | いいえ | `qwen2.5-coder:7b-instruct` | 使用するOllamaモデル。 |
-| `ollama-host` | いいえ | `http://127.0.0.1:11434` | Ollama APIのベースURL。 |
-| `language` | いいえ | `en` | 出力言語。日本語は `ja` または `jp`。 |
-| `bilingual` | いいえ | `false` | 英語と指定言語の両方を生成。 |
-| `max-diff-chars` | いいえ | `30000` | モデルへ渡すテキスト差分の最大文字数。 |
-| `num-ctx` | いいえ | `16384` | Ollamaのコンテキストサイズ。 |
-| `inference-timeout-seconds` | いいえ | `600` | Ollamaから通信がない場合のタイムアウト秒数。 |
-| `fail-on-llm-error` | いいえ | `false` | `true` ならフォールバックせずActionを失敗させる。 |
-| `dry-run` | いいえ | `false` | Releaseを変更せず生成結果だけを出力。 |
-| `output-file` | いいえ | 空 | 生成したMarkdownの保存先。 |
+| 名前                        | 必須   | 既定値                      | 説明                                                              |
+| --------------------------- | ------ | --------------------------- | ----------------------------------------------------------------- |
+| `github-token`              | はい   | -                           | `contents: write` 権限を持つtoken。通常は `${{ github.token }}`。 |
+| `tag`                       | いいえ | `${{ github.ref_name }}`    | Releaseの対象タグ。                                               |
+| `model`                     | いいえ | `qwen2.5-coder:7b-instruct` | 使用するOllamaモデル。                                            |
+| `ollama-host`               | いいえ | `http://127.0.0.1:11434`    | Ollama APIのベースURL。                                           |
+| `language`                  | いいえ | `en`                        | 出力言語。日本語は `ja` または `jp`。                             |
+| `bilingual`                 | いいえ | `false`                     | 英語と指定言語の両方を生成。                                      |
+| `max-diff-chars`            | いいえ | `30000`                     | モデルへ渡すテキスト差分の最大文字数。                            |
+| `num-ctx`                   | いいえ | `16384`                     | Ollamaのコンテキストサイズ。                                      |
+| `inference-timeout-seconds` | いいえ | `600`                       | Ollamaから通信がない場合のタイムアウト秒数。                      |
+| `fail-on-llm-error`         | いいえ | `false`                     | `true` ならフォールバックせずActionを失敗させる。                 |
+| `dry-run`                   | いいえ | `false`                     | Releaseを変更せず生成結果だけを出力。                             |
+| `output-file`               | いいえ | 空                          | 生成したMarkdownの保存先。                                        |
 
 ## Outputs
 
-| 名前 | 説明 |
-| --- | --- |
-| `release-url` | 作成または更新したReleaseのURL。dry-runでは空。 |
-| `previous-tag` | 比較元に使用した直前のセマンティックバージョンタグ。 |
-| `used-llm` | Ollamaで生成した場合は `true`、フォールバック時は `false`。 |
+| 名前           | 説明                                                        |
+| -------------- | ----------------------------------------------------------- |
+| `release-url`  | 作成または更新したReleaseのURL。dry-runでは空。             |
+| `previous-tag` | 比較元に使用した直前のセマンティックバージョンタグ。        |
+| `used-llm`     | Ollamaで生成した場合は `true`、フォールバック時は `false`。 |
 
 後続ステップから `${{ steps.release-notes.outputs.release-url }}` のように参照できます。
 
@@ -102,7 +102,7 @@ jobs:
 
 ## ローカルでプレビューする
 
-Node.js 24以降、Git、Ollamaを用意し、対象リポジトリのルートで実行します。
+Node.js 22以降、Git、Ollamaを用意し、対象リポジトリのルートで実行します。
 
 ```powershell
 ollama pull qwen2.5-coder:7b-instruct
@@ -121,10 +121,11 @@ node path/to/dist/index.js `
 
 ```bash
 npm install
+npm run format
 npm run verify
 ```
 
-`npm run verify` は型チェック、配布ファイルのビルド、specを順番に実行します。ソースを変更した場合は、更新された `dist/index.js` もコミットしてください。
+`npm run format` はTypeScript、JSON、YAML、MarkdownなどをPrettierで整形します。`npm run verify` はフォーマット確認、型チェック、配布ファイルのビルド、specを順番に実行します。ソースを変更した場合は、更新された `dist/index.js` もコミットしてください。
 
 ## Marketplaceへ公開する（メンテナー向け）
 
