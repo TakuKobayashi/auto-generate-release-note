@@ -1,6 +1,6 @@
 {
-  "name": "ollama-ai-release-notes-action",
-  "version": "1.0.0",
+  "name": "auto-generate-release-note",
+  "version": "1.0.2",
   "private": true,
   "description": "Generate GitHub release notes from Git history with Ollama",
   "type": "module",

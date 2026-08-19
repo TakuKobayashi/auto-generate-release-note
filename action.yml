@@ -1,4 +1,4 @@
-name: Ollama AI Release Notes
+name: auto-generate-release-note
 description: Generate and publish GitHub release notes from Git history with a local Ollama model
 author: TakuKobayashi
 

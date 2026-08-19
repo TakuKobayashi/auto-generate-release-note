@@ -1,4 +1,4 @@
-# Ollama AI Release Notes
+# auto-generate-release-note
 
 [English](README.md) | 日本語
 
