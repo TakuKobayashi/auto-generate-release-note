@@ -136,11 +136,13 @@ npm run verify
 1. Make this repository public on GitHub.
 2. Push the changes to the `main` branch.
 3. Create and push a tag such as `v1` or `v1.0.0`.
-4. The Release workflow validates formatting, types, the build, specs, and the committed distribution, then automatically creates a GitHub Release. Once the tag is pushed, the action can be used as `TakuKobayashi/auto-generate-release-note@v1`.
+4. The Release workflow validates formatting, types, the build, specs, and the committed distribution. It then runs this action itself, generates release notes with Ollama, and creates or updates the GitHub Release with the generated Markdown. Once the tag is pushed, the action can be used as `TakuKobayashi/auto-generate-release-note@v1`.
 5. For the first Marketplace publication only, edit the generated release on GitHub and select **Publish this Action to the GitHub Marketplace**.
 6. Select a category such as Utilities and update the release. The first publication requires acceptance of the Marketplace Developer Agreement and two-factor authentication.
 
 The public GitHub API does not expose the Marketplace publication checkbox, so steps 5 and 6 require a one-time operation in the GitHub UI. GitHub Release creation and action distribution are automated.
+
+To regenerate the notes for an existing tag, open **Actions → Release → Run workflow**, enter the tag, and run the workflow. The existing release body will be replaced with newly generated notes.
 
 ```bash
 git tag -a v1.0.0 -m "v1.0.0"

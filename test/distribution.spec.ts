@@ -18,4 +18,12 @@ describe('GitHub Action distribution', () => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Usage: node dist\/index\.js/);
   });
+
+  it('uses this action to generate and publish repository releases', () => {
+    const workflow = readFileSync('.github/workflows/release.yml', 'utf8');
+    assert.match(workflow, /uses: \.\//);
+    assert.match(workflow, /github-token: \$\{\{ github\.token \}\}/);
+    assert.match(workflow, /tag: \$\{\{ inputs\.tag \|\| github\.ref_name \}\}/);
+    assert.doesNotMatch(workflow, /gh release create/);
+  });
 });
