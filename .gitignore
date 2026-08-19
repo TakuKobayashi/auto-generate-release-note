@@ -1,0 +1,5 @@
+node_modules/
+.tools/
+.node-*.zip
+coverage/
+release-notes-preview.md

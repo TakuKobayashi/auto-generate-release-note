@@ -1,0 +1,22 @@
+{
+  "name": "ollama-ai-release-notes-action",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Generate GitHub release notes from Git history with Ollama",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/index.js",
+    "check": "tsc --noEmit",
+    "test": "tsx --test test/*.spec.ts",
+    "verify": "npm run check && npm run build && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}
