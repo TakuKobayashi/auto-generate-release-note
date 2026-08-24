@@ -81,8 +81,6 @@ On its first run, the action installs Ollama and the default model on a GitHub-h
 | `ollama-host`               | No       | `http://127.0.0.1:11434`    | Base URL of the Ollama API.                                          |
 | `language`                  | No       | `en`                        | Output language. Both `ja` and `jp` select Japanese.                 |
 | `bilingual`                 | No       | `false`                     | Generates English and the selected language.                         |
-| `max-diff-chars`            | No       | `30000`                     | Maximum number of text-diff characters sent to the model.            |
-| `num-ctx`                   | No       | `16384`                     | Ollama context-window size.                                          |
 | `inference-timeout-seconds` | No       | `600`                       | Inactivity timeout after Ollama starts streaming its response.       |
 | `fail-on-llm-error`         | No       | `false`                     | Fails the action instead of generating fallback notes.               |
 | `dry-run`                   | No       | `false`                     | Generates notes without creating or updating a release.              |
@@ -101,6 +99,10 @@ Reference an output from a later step with syntax such as `${{ steps.release-not
 ## Behavior and security
 
 Comparison tags use formats such as `v1.2.3`, `1.2.3`, and `v1.2.3-beta.1`. The model receives non-merge commit subjects and authors, changed-file statistics, and eligible text diffs.
+
+Generation is hierarchical. The action first builds a project profile from the repository tree, README files, and common project manifests. It then analyzes complete diffs in related package or project-area groups. Lockfiles, generated output, binary files, and serialized Unity scenes/assets are interpreted from paths, statistics, commits, manifests, and related source changes instead of sending their bulk contents. Results are consolidated before the final release notes are written.
+
+The action does not impose a character or context-window input limit. It first sends each complete related change group to Ollama. Only when Ollama reports a context, token, or memory-capacity failure does the action split that same evidence and retry; no diff content is discarded.
 
 The prompt instructs the model to treat text from diffs as untrusted input, but you should still review LLM output before publishing it. When an external `ollama-host` is configured, diff data is sent to that host. In third-party workflows, pinning this action to a complete commit SHA provides stronger supply-chain protection than a moving version tag.
 

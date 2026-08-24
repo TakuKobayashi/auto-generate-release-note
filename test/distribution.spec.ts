@@ -10,6 +10,12 @@ describe('GitHub Action distribution', () => {
     assert.doesNotMatch(metadata, /src\/index\.ts/);
   });
 
+  it('does not expose a whole-diff truncation input', () => {
+    const metadata = readFileSync('action.yml', 'utf8');
+    assert.doesNotMatch(metadata, /max-diff-chars/);
+    assert.doesNotMatch(metadata, /num-ctx/);
+  });
+
   it('runs the bundled CLI without TypeScript tooling', () => {
     const result = spawnSync(process.execPath, ['dist/index.js', '--help'], {
       encoding: 'utf8',

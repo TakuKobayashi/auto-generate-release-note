@@ -7,8 +7,6 @@ const valueOptions = new Set([
   'language',
   'ollama-host',
   'output-file',
-  'max-diff-chars',
-  'num-ctx',
   'inference-timeout-seconds',
   'github-token',
 ]);
@@ -23,8 +21,6 @@ Options:
   --model <model>           Ollama model name
   --ollama-host <url>       Ollama API base URL
   --output-file <path>      Write generated Markdown to this path
-  --max-diff-chars <count>  Maximum diff characters analyzed per Ollama request
-  --num-ctx <count>         Ollama context-window size
   --inference-timeout-seconds <seconds>
                             Stop when an Ollama response stream becomes inactive
   --fail-on-llm-error       Disable deterministic fallback notes
