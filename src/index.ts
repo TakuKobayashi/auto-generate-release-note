@@ -1,9 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, writeFileSync } from 'node:fs';
-import { request as httpRequest } from 'node:http';
-import { request as httpsRequest } from 'node:https';
 import { extname } from 'node:path';
 import { helpText, parseArgs } from './cli.js';
+import { requestOllamaChat } from './ollama-request.js';
 import { isReleaseTag } from './release-tags.js';
 
 const args = parseArgs(process.argv.slice(2));
@@ -339,50 +338,6 @@ async function readOllamaStream(response) {
   return content.trim();
 }
 
-function requestOllamaChat(requestBody) {
-  const url = new URL(`${ollamaHost}/api/chat`);
-  const requestImpl = url.protocol === 'https:' ? httpsRequest : httpRequest;
-  const body = JSON.stringify(requestBody);
-
-  return new Promise((resolve, reject) => {
-    const startedAt = Date.now();
-    const waitingTimer = setInterval(() => {
-      console.log(
-        `Waiting for Ollama to start responding: elapsed=${Math.floor((Date.now() - startedAt) / 1000)}s request-chars=${body.length}`
-      );
-    }, 15000);
-    const finish = (callback, value) => {
-      clearInterval(waitingTimer);
-      callback(value);
-    };
-    const request = requestImpl(
-      url,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(body),
-        },
-      },
-      (response) => {
-        console.log(
-          `Ollama started responding after ${Math.floor((Date.now() - startedAt) / 1000)}s`
-        );
-        finish(resolve, response);
-      }
-    );
-    request.on('error', (error) => finish(reject, error));
-    request.setTimeout(inferenceTimeoutSeconds * 1000, () => {
-      const error = Object.assign(
-        new Error(`Ollama produced no network activity for ${inferenceTimeoutSeconds} seconds`),
-        { code: 'OLLAMA_INFERENCE_TIMEOUT' }
-      );
-      request.destroy(error);
-    });
-    request.end(body);
-  });
-}
-
 async function readResponseText(response) {
   const chunks = [];
   for await (const chunk of response) chunks.push(chunk);
@@ -598,7 +553,11 @@ async function generateWithModel(
   const startedAt = Date.now();
   let response;
   try {
-    response = await requestOllamaChat(requestBody);
+    response = await requestOllamaChat({
+      ollamaHost,
+      requestBody,
+      inactivityTimeoutMs: inferenceTimeoutSeconds * 1000,
+    });
   } catch (error) {
     throw new Error(`Ollama request could not complete after ${Date.now() - startedAt}ms`, {
       cause: error,

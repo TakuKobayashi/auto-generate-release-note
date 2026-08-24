@@ -1,8 +1,6 @@
 // src/index.ts
 import { execFileSync } from "node:child_process";
 import { appendFileSync, writeFileSync } from "node:fs";
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
 import { extname } from "node:path";
 
 // src/cli.ts
@@ -31,7 +29,7 @@ Options:
   --max-diff-chars <count>  Maximum diff characters analyzed per Ollama request
   --num-ctx <count>         Ollama context-window size
   --inference-timeout-seconds <seconds>
-                            Stop after this many seconds without an Ollama response
+                            Stop when an Ollama response stream becomes inactive
   --fail-on-llm-error       Disable deterministic fallback notes
   --github-token <token>    GitHub token (prefer INPUT_GITHUB_TOKEN for secrecy)
   -h, --help                Show this help`;
@@ -60,6 +58,87 @@ function parseArgs(argv) {
     options[rawName] = value;
   }
   return options;
+}
+
+// src/ollama-request.ts
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+function inferenceTimeoutError(message) {
+  return Object.assign(new Error(message), { code: "OLLAMA_INFERENCE_TIMEOUT" });
+}
+async function checkOllamaHealth(host, timeoutMs) {
+  const response = await fetch(`${host}/api/tags`, { signal: AbortSignal.timeout(timeoutMs) });
+  if (!response.ok) throw new Error(`Ollama health check returned HTTP ${response.status}`);
+}
+function requestOllamaChat({
+  ollamaHost: ollamaHost2,
+  requestBody,
+  inactivityTimeoutMs,
+  healthCheckIntervalMs = 15e3,
+  healthCheckTimeoutMs = 5e3,
+  maxHealthCheckFailures = 3,
+  log = console.log
+}) {
+  const url = new URL(`${ollamaHost2}/api/chat`);
+  const requestImpl = url.protocol === "https:" ? httpsRequest : httpRequest;
+  const body = JSON.stringify(requestBody);
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    let consecutiveHealthCheckFailures = 0;
+    let healthCheckRunning = false;
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(waitingTimer);
+      callback(value);
+    };
+    const request = requestImpl(
+      url,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body)
+        }
+      },
+      (response) => {
+        log(`Ollama started responding after ${Math.floor((Date.now() - startedAt) / 1e3)}s`);
+        request.setTimeout(inactivityTimeoutMs, () => {
+          request.destroy(
+            inferenceTimeoutError(
+              `Ollama response stream produced no network activity for ${Math.floor(inactivityTimeoutMs / 1e3)} seconds`
+            )
+          );
+        });
+        finish(resolve, response);
+      }
+    );
+    const waitingTimer = setInterval(async () => {
+      log(
+        `Waiting for Ollama to finish prompt evaluation: elapsed=${Math.floor((Date.now() - startedAt) / 1e3)}s request-chars=${body.length}`
+      );
+      if (healthCheckRunning) return;
+      healthCheckRunning = true;
+      try {
+        await checkOllamaHealth(ollamaHost2, healthCheckTimeoutMs);
+        consecutiveHealthCheckFailures = 0;
+      } catch {
+        consecutiveHealthCheckFailures += 1;
+        if (consecutiveHealthCheckFailures >= maxHealthCheckFailures) {
+          request.destroy(
+            inferenceTimeoutError(
+              `Ollama became unreachable during prompt evaluation after ${maxHealthCheckFailures} consecutive health-check failures`
+            )
+          );
+        }
+      } finally {
+        healthCheckRunning = false;
+      }
+    }, healthCheckIntervalMs);
+    request.on("error", (error) => finish(reject, error));
+    request.end(body);
+  });
 }
 
 // src/release-tags.ts
@@ -381,48 +460,6 @@ async function readOllamaStream(response) {
   if (buffered.trim()) consumeLine(buffered);
   return content.trim();
 }
-function requestOllamaChat(requestBody) {
-  const url = new URL(`${ollamaHost}/api/chat`);
-  const requestImpl = url.protocol === "https:" ? httpsRequest : httpRequest;
-  const body = JSON.stringify(requestBody);
-  return new Promise((resolve, reject) => {
-    const startedAt = Date.now();
-    const waitingTimer = setInterval(() => {
-      console.log(
-        `Waiting for Ollama to start responding: elapsed=${Math.floor((Date.now() - startedAt) / 1e3)}s request-chars=${body.length}`
-      );
-    }, 15e3);
-    const finish = (callback, value) => {
-      clearInterval(waitingTimer);
-      callback(value);
-    };
-    const request = requestImpl(
-      url,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(body)
-        }
-      },
-      (response) => {
-        console.log(
-          `Ollama started responding after ${Math.floor((Date.now() - startedAt) / 1e3)}s`
-        );
-        finish(resolve, response);
-      }
-    );
-    request.on("error", (error) => finish(reject, error));
-    request.setTimeout(inferenceTimeoutSeconds * 1e3, () => {
-      const error = Object.assign(
-        new Error(`Ollama produced no network activity for ${inferenceTimeoutSeconds} seconds`),
-        { code: "OLLAMA_INFERENCE_TIMEOUT" }
-      );
-      request.destroy(error);
-    });
-    request.end(body);
-  });
-}
 async function readResponseText(response) {
   const chunks = [];
   for await (const chunk of response) chunks.push(chunk);
@@ -629,7 +666,11 @@ ${sourceMaterial}`
   const startedAt = Date.now();
   let response;
   try {
-    response = await requestOllamaChat(requestBody);
+    response = await requestOllamaChat({
+      ollamaHost,
+      requestBody,
+      inactivityTimeoutMs: inferenceTimeoutSeconds * 1e3
+    });
   } catch (error) {
     throw new Error(`Ollama request could not complete after ${Date.now() - startedAt}ms`, {
       cause: error

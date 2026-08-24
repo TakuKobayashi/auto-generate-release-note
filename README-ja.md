@@ -83,7 +83,7 @@ jobs:
 | `bilingual`                 | いいえ | `false`                     | 英語と指定言語の両方を生成。                                      |
 | `max-diff-chars`            | いいえ | `30000`                     | モデルへ渡すテキスト差分の最大文字数。                            |
 | `num-ctx`                   | いいえ | `16384`                     | Ollamaのコンテキストサイズ。                                      |
-| `inference-timeout-seconds` | いいえ | `600`                       | Ollamaから通信がない場合のタイムアウト秒数。                      |
+| `inference-timeout-seconds` | いいえ | `600`                       | Ollamaが応答を開始した後のストリーム無通信タイムアウト秒数。      |
 | `fail-on-llm-error`         | いいえ | `false`                     | `true` ならフォールバックせずActionを失敗させる。                 |
 | `dry-run`                   | いいえ | `false`                     | Releaseを変更せず生成結果だけを出力。                             |
 | `output-file`               | いいえ | 空                          | 生成したMarkdownの保存先。                                        |

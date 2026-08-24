@@ -83,7 +83,7 @@ On its first run, the action installs Ollama and the default model on a GitHub-h
 | `bilingual`                 | No       | `false`                     | Generates English and the selected language.                         |
 | `max-diff-chars`            | No       | `30000`                     | Maximum number of text-diff characters sent to the model.            |
 | `num-ctx`                   | No       | `16384`                     | Ollama context-window size.                                          |
-| `inference-timeout-seconds` | No       | `600`                       | Timeout when no network activity is received from Ollama.            |
+| `inference-timeout-seconds` | No       | `600`                       | Inactivity timeout after Ollama starts streaming its response.       |
 | `fail-on-llm-error`         | No       | `false`                     | Fails the action instead of generating fallback notes.               |
 | `dry-run`                   | No       | `false`                     | Generates notes without creating or updating a release.              |
 | `output-file`               | No       | Empty                       | File path where generated Markdown is written.                       |

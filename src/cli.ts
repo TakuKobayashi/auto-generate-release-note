@@ -26,7 +26,7 @@ Options:
   --max-diff-chars <count>  Maximum diff characters analyzed per Ollama request
   --num-ctx <count>         Ollama context-window size
   --inference-timeout-seconds <seconds>
-                            Stop after this many seconds without an Ollama response
+                            Stop when an Ollama response stream becomes inactive
   --fail-on-llm-error       Disable deterministic fallback notes
   --github-token <token>    GitHub token (prefer INPUT_GITHUB_TOKEN for secrecy)
   -h, --help                Show this help`;
