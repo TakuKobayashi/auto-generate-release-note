@@ -86,3 +86,9 @@ export function splitEvidence(evidence: string) {
   const middle = Math.ceil(lines.length / 2);
   return [lines.slice(0, middle).join('\n'), lines.slice(middle).join('\n')].filter(Boolean);
 }
+
+export function outputTokenBudget(stage: string) {
+  if (stage.startsWith('final-release-notes')) return 2048;
+  if (stage.includes('project-profile') || stage.includes('consolidation')) return 1024;
+  return 768;
+}

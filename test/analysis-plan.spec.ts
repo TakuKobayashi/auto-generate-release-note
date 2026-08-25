@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   createAnalysisTasks,
+  outputTokenBudget,
   relatedGroup,
   selectProjectContextFiles,
   shouldAnalyzeAsMetadata,
@@ -47,5 +48,11 @@ describe('change analysis planning', () => {
       selectProjectContextFiles(['src/index.ts', 'README.md', 'packages/app/package.json']),
       ['README.md', 'packages/app/package.json']
     );
+  });
+
+  it('keeps intermediate analysis concise while allowing longer final notes', () => {
+    assert.equal(outputTokenBudget('analysis-1/8-packages/source'), 768);
+    assert.equal(outputTokenBudget('project-profile'), 1024);
+    assert.equal(outputTokenBudget('final-release-notes'), 2048);
   });
 });

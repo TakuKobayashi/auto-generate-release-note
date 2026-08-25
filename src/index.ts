@@ -3,6 +3,7 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import { extname } from 'node:path';
 import {
   createAnalysisTasks,
+  outputTokenBudget,
   selectProjectContextFiles,
   shouldAnalyzeAsMetadata,
   splitEvidence,
@@ -54,6 +55,7 @@ const inferenceTimeoutSeconds = Number.parseInt(
   args['inference-timeout-seconds'] || env.INPUT_INFERENCE_TIMEOUT_SECONDS || '600',
   10
 );
+let modelContextLength;
 
 const excludedContentExtensions = new Set([
   // Images and design assets
@@ -279,6 +281,7 @@ function logOllamaDiagnostics(stage, sourceChars) {
       `language=${normalizedLanguage}`,
       `bilingual=${shouldPublishBilingual}`,
       `source-chars=${sourceChars}`,
+      `model-context-length=${modelContextLength || 'server-default'}`,
       `inference-timeout-seconds=${inferenceTimeoutSeconds}`,
       'stream=true',
     ].join(' ')
@@ -392,12 +395,22 @@ async function verifyOllama() {
   }
 
   const result = await response.json();
-  const installedModels = (result.models || []).flatMap((entry) => [entry.name, entry.model]);
-  if (!installedModels.includes(model)) {
+  const installedModel = (result.models || []).find(
+    (entry) => entry.name === model || entry.model === model
+  );
+  if (!installedModel) {
     throw new Error(
       `Ollama model '${model}' is not installed. Install it with 'ollama pull ${model}' and retry.`
     );
   }
+  const reportedContextLength = Number(installedModel.details?.context_length);
+  modelContextLength =
+    Number.isFinite(reportedContextLength) && reportedContextLength > 0
+      ? reportedContextLength
+      : undefined;
+  console.log(
+    `Using ${modelContextLength || "Ollama's server-default"} context tokens reported for model '${model}'`
+  );
 }
 
 function fallbackNotes(previousTag, commits, changedFiles) {
@@ -463,7 +476,13 @@ async function runModel(userPrompt, stage) {
   const requestBody = {
     model,
     stream: true,
-    options: { temperature: 0.2 },
+    options: {
+      temperature: 0.1,
+      // Bound generated analysis prose, not input evidence. This keeps map/reduce
+      // stages concise while every relevant diff is still analyzed.
+      num_predict: outputTokenBudget(stage),
+      ...(modelContextLength ? { num_ctx: modelContextLength } : {}),
+    },
     messages: [
       {
         role: 'system',
@@ -584,8 +603,9 @@ async function buildProjectProfile(repositoryFiles) {
 }
 
 async function writeFinalReleaseNotes(languageInstruction, sourceMaterial) {
+  let draft;
   try {
-    return await runModel(`${languageInstruction}\n\n${sourceMaterial}`, 'final-release-notes');
+    draft = await runModel(`${languageInstruction}\n\n${sourceMaterial}`, 'final-release-notes');
   } catch (error) {
     if (!isCapacityError(error)) throw error;
     console.warn(
@@ -603,11 +623,29 @@ async function writeFinalReleaseNotes(languageInstruction, sourceMaterial) {
       );
     }
     const compactEvidence = await consolidateSummaries(summaries, 'final-evidence-consolidation');
-    return runModel(
+    draft = await runModel(
       `${languageInstruction}\n\nCONSOLIDATED RELEASE EVIDENCE:\n${compactEvidence}`,
       'final-release-notes-retry'
     );
   }
+  return runModel(
+    [
+      `Review and correct this draft for the single target release '${tag}'.`,
+      `The previous tag '${previousTag || 'none'}' is only the comparison base; never create a release section for it.`,
+      'Keep only claims directly supported by the supplied evidence.',
+      'Compare the draft against every detailed group analysis and restore every omitted, supported distinct change.',
+      'A one-item draft is invalid when the evidence contains multiple distinct release-relevant changes.',
+      'Delete generic claims such as code cleanup, improved user experience, unspecified fixes, removed deprecated features, dependency-update requirements, breaking changes, or migration steps unless the evidence explicitly proves them.',
+      'Prefer concrete behavior and affected components. Preserve the requested language structure and semantic equivalence.',
+      'Return only the corrected final Markdown.',
+      '',
+      sourceMaterial,
+      '',
+      'DRAFT TO REVIEW:',
+      draft,
+    ].join('\n'),
+    'final-release-notes-review'
+  );
 }
 
 async function generateWithModel(
@@ -619,7 +657,6 @@ async function generateWithModel(
   metadataChanges,
   projectProfile
 ) {
-  const range = previousTag ? `${previousTag}...${tag}` : tag;
   const tasks = createAnalysisTasks(patches);
   console.log(
     `Analyzing complete diffs for ${patches.length} text files in ${tasks.length} related groups with capacity fallback only when Ollama rejects a request`
@@ -659,10 +696,13 @@ async function generateWithModel(
     );
   }
   const consolidated = await consolidateSummaries(summaries);
-  const sourceMaterial = `PROJECT PROFILE:\n${projectProfile}\n\nCOMMITS:\n${commits}\n\nCHANGED FILES:\n${changedFiles}\n\nCONTENT-EXCLUDED FILES:\n${excludedFiles || 'None'}\n\nCONSOLIDATED FILE-BY-FILE ANALYSIS:\n${consolidated}`;
+  const detailedAnalyses = summaries
+    .map((summary, index) => `CHANGE GROUP ${index + 1}:\n${summary}`)
+    .join('\n\n');
+  const sourceMaterial = `PROJECT PROFILE:\n${projectProfile}\n\nCOMMITS:\n${commits}\n\nCHANGED FILES:\n${changedFiles}\n\nCONTENT-EXCLUDED FILES:\n${excludedFiles || 'None'}\n\nCONSOLIDATED ANALYSIS:\n${consolidated}\n\nDETAILED GROUP ANALYSES (use these to prevent omissions):\n${detailedAnalyses}`;
   const languageInstruction = shouldPublishBilingual
-    ? `Write bilingual release notes for ${range}. First write a complete English version under the heading '# English'. Then write an equivalent ${targetLanguage} translation under the heading '# ${targetLanguage}', separated from English by a horizontal rule. Keep both versions semantically equivalent.`
-    : `Write the release notes in ${targetLanguage} only for ${range}. Do not duplicate or translate the notes into another language.`;
+    ? `Write comprehensive bilingual release notes for the single target release ${tag}, based on changes since ${previousTag || 'the repository began'}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. First write a complete English version under the heading '# English'. Then write an equivalent ${targetLanguage} translation under the heading '# ${targetLanguage}', separated from English by a horizontal rule. Keep both versions semantically equivalent. Do not create a separate section for ${previousTag || 'a previous release'}. Include breaking changes or migration steps only when explicitly supported by evidence.`
+    : `Write comprehensive release notes in ${targetLanguage} only for the single target release ${tag}, based on changes since ${previousTag || 'the repository began'}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. Do not duplicate or translate the notes into another language. Do not create a separate section for ${previousTag || 'a previous release'}. Include breaking changes or migration steps only when explicitly supported by evidence.`;
   return writeFinalReleaseNotes(languageInstruction, sourceMaterial);
 }
 
