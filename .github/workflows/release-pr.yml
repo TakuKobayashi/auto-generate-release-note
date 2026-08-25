@@ -53,6 +53,7 @@ jobs:
           language: en
           dry-run: 'true'
           fail-on-llm-error: 'true'
+          template-file: .github/PULL_REQUEST_TEMPLATE/release.md
           output-file: ${{ runner.temp }}/release-notes.md
 
       - name: Create release pull request

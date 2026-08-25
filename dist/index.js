@@ -1,6 +1,6 @@
 // src/index.ts
 import { execFileSync } from "node:child_process";
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { extname as extname2 } from "node:path";
 
 // src/analysis-plan.ts
@@ -74,6 +74,7 @@ function splitEvidence(evidence) {
   return [lines.slice(0, middle).join("\n"), lines.slice(middle).join("\n")].filter(Boolean);
 }
 function outputTokenBudget(stage) {
+  if (stage.startsWith("release-template")) return 4096;
   if (stage.startsWith("final-release-notes")) return 2048;
   if (stage.includes("project-profile") || stage.includes("consolidation")) return 1024;
   return 768;
@@ -88,6 +89,7 @@ var valueOptions = /* @__PURE__ */ new Set([
   "language",
   "ollama-host",
   "output-file",
+  "template-file",
   "inference-timeout-seconds",
   "github-token"
 ]);
@@ -102,6 +104,7 @@ Options:
   --model <model>           Ollama model name
   --ollama-host <url>       Ollama API base URL
   --output-file <path>      Write generated Markdown to this path
+  --template-file <path>    Populate the release-note section of a Markdown template
   --inference-timeout-seconds <seconds>
                             Stop when an Ollama response stream becomes inactive
   --fail-on-llm-error       Disable deterministic fallback notes
@@ -220,6 +223,57 @@ function isReleaseTag(value) {
   return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value);
 }
 
+// src/release-template.ts
+function buildTemplateApplicationPrompt(template, releaseNotes, releaseName2) {
+  return [
+    `Populate the pull-request Markdown template for release '${releaseName2}'.`,
+    "Determine the intended release-notes location from its headings, instructions, comments, and placeholder text.",
+    "Replace only the placeholder or empty content intended for release notes with the supplied release notes.",
+    "Preserve the complete template structure and all unrelated wording, headings, links, comments, and checklist states exactly.",
+    "Do not mark checkboxes, answer unrelated questions, add facts, summarize the supplied notes, or wrap the result in a code fence.",
+    "Return the complete populated Markdown template and nothing else.",
+    "",
+    "<pull_request_template>",
+    template,
+    "</pull_request_template>",
+    "",
+    "<generated_release_notes>",
+    releaseNotes,
+    "</generated_release_notes>"
+  ].join("\n");
+}
+function buildTemplateReviewPrompt(template, releaseNotes, populatedTemplate, releaseName2) {
+  return [
+    `Review the populated pull-request template for release '${releaseName2}'.`,
+    "Correct it only if needed so the generated release notes appear in the most appropriate release-note section.",
+    "The original template is authoritative. Preserve all of its unrelated headings, wording, links, comments, and unchecked checklist states exactly.",
+    "Remove the release-note placeholder, but do not alter unrelated placeholders or answer unrelated questions.",
+    "Return the complete corrected Markdown template and nothing else.",
+    "",
+    "<original_template>",
+    template,
+    "</original_template>",
+    "",
+    "<generated_release_notes>",
+    releaseNotes,
+    "</generated_release_notes>",
+    "",
+    "<populated_template_to_review>",
+    populatedTemplate,
+    "</populated_template_to_review>"
+  ].join("\n");
+}
+function assertTemplateScaffoldingPreserved(template, result) {
+  const protectedLines = template.split("\r\n").join("\n").split("\n").filter((line) => /^(#{1,6})\s+\S/.test(line) || /^\s*- \[[ xX]\]\s+/.test(line));
+  const comments = template.match(/<!--[\s\S]*?-->/g) || [];
+  const missing = [...protectedLines, ...comments].filter((part) => !result.includes(part));
+  if (missing.length > 0) {
+    throw new Error(
+      `The model did not preserve required template structure: ${missing.map((part) => JSON.stringify(part)).join(", ")}`
+    );
+  }
+}
+
 // src/index.ts
 var args = parseArgs(process.argv.slice(2));
 if (args.help) {
@@ -237,6 +291,7 @@ var repository = env.GITHUB_REPOSITORY;
 var model = args.model || env.INPUT_MODEL || "qwen2.5-coder:7b-instruct";
 var ollamaHost = (args["ollama-host"] || env.INPUT_OLLAMA_HOST || "http://127.0.0.1:11434").replace(/\/$/, "");
 var outputFile = args["output-file"] || env.INPUT_OUTPUT_FILE;
+var templateFile = args["template-file"] || env.INPUT_TEMPLATE_FILE;
 var requestedLanguage = (args.language || env.INPUT_LANGUAGE || "en").trim().toLowerCase();
 var normalizedLanguage = requestedLanguage === "jp" ? "ja" : requestedLanguage;
 var languageAliases = {
@@ -933,6 +988,20 @@ try {
   usedLlm = false;
   console.warn(`::warning::${formatError(error)}. Publishing fallback notes.`);
   notes = fallbackNotes(previousTag, commits, changedFiles);
+}
+if (templateFile) {
+  const template = readFileSync(templateFile, "utf8");
+  if (!template.trim()) throw new Error(`Template file is empty: ${templateFile}`);
+  const generatedNotes = notes;
+  const populatedTemplate = await runModel(
+    buildTemplateApplicationPrompt(template, notes, releaseName),
+    "release-template-application"
+  );
+  notes = await runModel(
+    buildTemplateReviewPrompt(template, generatedNotes, populatedTemplate, releaseName),
+    "release-template-review"
+  );
+  assertTemplateScaffoldingPreserved(template, notes);
 }
 if (outputFile) {
   writeFileSync(outputFile, `${notes}

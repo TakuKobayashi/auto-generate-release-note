@@ -46,6 +46,10 @@ inputs:
     description: Optional path where generated Markdown is written (especially useful with dry-run)
     required: false
     default: ''
+  template-file:
+    description: Optional Markdown template whose release-note section is populated by the model
+    required: false
+    default: ''
 
 outputs:
   release-url:
@@ -113,6 +117,7 @@ runs:
         INPUT_FAIL_ON_LLM_ERROR: ${{ inputs.fail-on-llm-error }}
         INPUT_DRY_RUN: ${{ inputs.dry-run }}
         INPUT_OUTPUT_FILE: ${{ inputs.output-file }}
+        INPUT_TEMPLATE_FILE: ${{ inputs.template-file }}
       run: node "$GITHUB_ACTION_PATH/dist/index.js"
 
 branding:

@@ -10,6 +10,8 @@ describe('parseArgs', () => {
         'HEAD',
         '--release-name',
         'v1.2.3',
+        '--template-file',
+        '.github/PULL_REQUEST_TEMPLATE/release.md',
         '--language=ja',
         '--dry-run',
         '--bilingual=false',
@@ -17,6 +19,7 @@ describe('parseArgs', () => {
       {
         tag: 'HEAD',
         'release-name': 'v1.2.3',
+        'template-file': '.github/PULL_REQUEST_TEMPLATE/release.md',
         language: 'ja',
         'dry-run': true,
         bilingual: false,

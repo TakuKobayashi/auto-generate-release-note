@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { extname } from 'node:path';
 import {
   createAnalysisTasks,
@@ -11,6 +11,11 @@ import {
 import { helpText, parseArgs } from './cli.js';
 import { requestOllamaChat } from './ollama-request.js';
 import { isReleaseTag } from './release-tags.js';
+import {
+  assertTemplateScaffoldingPreserved,
+  buildTemplateApplicationPrompt,
+  buildTemplateReviewPrompt,
+} from './release-template.js';
 
 const args = parseArgs(process.argv.slice(2));
 if (args.help) {
@@ -32,6 +37,7 @@ const ollamaHost = (
   'http://127.0.0.1:11434'
 ).replace(/\/$/, '');
 const outputFile = args['output-file'] || env.INPUT_OUTPUT_FILE;
+const templateFile = args['template-file'] || env.INPUT_TEMPLATE_FILE;
 const requestedLanguage = (args.language || env.INPUT_LANGUAGE || 'en').trim().toLowerCase();
 // `ja` is the ISO 639 language code. Accept the commonly supplied `jp`
 // country code as a convenience alias, then use only the normalized value.
@@ -758,6 +764,21 @@ try {
   usedLlm = false;
   console.warn(`::warning::${formatError(error)}. Publishing fallback notes.`);
   notes = fallbackNotes(previousTag, commits, changedFiles);
+}
+
+if (templateFile) {
+  const template = readFileSync(templateFile, 'utf8');
+  if (!template.trim()) throw new Error(`Template file is empty: ${templateFile}`);
+  const generatedNotes = notes;
+  const populatedTemplate = await runModel(
+    buildTemplateApplicationPrompt(template, notes, releaseName),
+    'release-template-application'
+  );
+  notes = await runModel(
+    buildTemplateReviewPrompt(template, generatedNotes, populatedTemplate, releaseName),
+    'release-template-review'
+  );
+  assertTemplateScaffoldingPreserved(template, notes);
 }
 
 if (outputFile) {

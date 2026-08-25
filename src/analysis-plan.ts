@@ -88,6 +88,7 @@ export function splitEvidence(evidence: string) {
 }
 
 export function outputTokenBudget(stage: string) {
+  if (stage.startsWith('release-template')) return 4096;
   if (stage.startsWith('final-release-notes')) return 2048;
   if (stage.includes('project-profile') || stage.includes('consolidation')) return 1024;
   return 768;

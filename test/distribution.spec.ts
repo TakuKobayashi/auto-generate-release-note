@@ -45,6 +45,7 @@ describe('GitHub Action distribution', () => {
     assert.match(workflow, /github\.event\.pull_request\.merged == true/);
     assert.match(workflow, /dry-run: 'true'/);
     assert.match(workflow, /release-name: \$\{\{ inputs\.version \}\}/);
+    assert.match(workflow, /template-file: \.github\/PULL_REQUEST_TEMPLATE\/release\.md/);
     assert.match(workflow, /gh pr create/);
     assert.match(workflow, /APPROVED_NOTES: \$\{\{ github\.event\.pull_request\.body \}\}/);
     assert.match(workflow, /gh release create/);

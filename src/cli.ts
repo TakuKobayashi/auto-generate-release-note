@@ -8,6 +8,7 @@ const valueOptions = new Set([
   'language',
   'ollama-host',
   'output-file',
+  'template-file',
   'inference-timeout-seconds',
   'github-token',
 ]);
@@ -23,6 +24,7 @@ Options:
   --model <model>           Ollama model name
   --ollama-host <url>       Ollama API base URL
   --output-file <path>      Write generated Markdown to this path
+  --template-file <path>    Populate the release-note section of a Markdown template
   --inference-timeout-seconds <seconds>
                             Stop when an Ollama response stream becomes inactive
   --fail-on-llm-error       Disable deterministic fallback notes

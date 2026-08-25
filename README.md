@@ -85,6 +85,8 @@ The included [release-pr workflow](.github/workflows/release-pr.yml) supports a 
 When copying this workflow into a repository that consumes the published action, replace `uses: ./` with `uses: TakuKobayashi/auto-generate-release-note@v1`.
 The repository setting **Allow GitHub Actions to create and approve pull requests** must permit pull-request creation by `github.token`.
 
+The workflow uses the sample [release pull-request template](.github/PULL_REQUEST_TEMPLATE/release.md). With `template-file`, the model reads the complete Markdown template, identifies the intended release-note section from its headings and instructions, inserts the generated notes there, and preserves unrelated sections such as approval checklists. A fixed marker is not required, so an existing repository-specific pull-request template can be used directly.
+
 ## Inputs
 
 | Name                        | Required | Default                     | Description                                                          |
@@ -100,6 +102,7 @@ The repository setting **Allow GitHub Actions to create and approve pull request
 | `fail-on-llm-error`         | No       | `false`                     | Fails the action instead of generating fallback notes.               |
 | `dry-run`                   | No       | `false`                     | Generates notes without creating or updating a release.              |
 | `output-file`               | No       | Empty                       | File path where generated Markdown is written.                       |
+| `template-file`             | No       | Empty                       | Markdown template populated with the generated release notes.        |
 
 ## Outputs
 
@@ -136,6 +139,7 @@ node path/to/dist/index.js `
 
 Add `--tag v1.2.3` to preview an existing tag. Run `node dist/index.js --help` to see all options.
 For a future release, use `--tag HEAD --release-name v1.2.3` so Git comparison and the displayed release version remain separate.
+Add `--template-file .github/PULL_REQUEST_TEMPLATE/release.md` to generate a complete pull-request body from an existing Markdown template.
 
 ## Development
 
