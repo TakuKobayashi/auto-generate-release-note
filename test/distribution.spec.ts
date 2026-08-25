@@ -10,6 +10,17 @@ describe('GitHub Action distribution', () => {
     assert.doesNotMatch(metadata, /src\/index\.ts/);
   });
 
+  it('restores an exact project profile cache before generation', () => {
+    const metadata = readFileSync('action.yml', 'utf8');
+    assert.match(metadata, /node "\$GITHUB_ACTION_PATH\/dist\/profile-cache-key\.js"/);
+    assert.match(metadata, /uses: actions\/cache@v4/);
+    assert.match(metadata, /PROJECT_PROFILE_CACHE_FILE:/);
+    assert.doesNotMatch(
+      metadata.match(/inputs:\n([\s\S]*?)\noutputs:/)?.[1] || '',
+      /profile-cache/
+    );
+  });
+
   it('does not expose a whole-diff truncation input', () => {
     const metadata = readFileSync('action.yml', 'utf8');
     assert.doesNotMatch(metadata, /max-diff-chars/);

@@ -76,6 +76,21 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Compute project profile cache key
+      id: project-profile-key
+      shell: bash
+      env:
+        INPUT_TAG: ${{ inputs.tag }}
+        INPUT_COMPARISON_TARGET: ${{ inputs.comparison-target }}
+        INPUT_MODEL: ${{ inputs.model }}
+      run: node "$GITHUB_ACTION_PATH/dist/profile-cache-key.js"
+
+    - name: Restore project profile
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/auto-generate-release-note/project-profile.json
+        key: auto-generate-release-note-${{ steps.project-profile-key.outputs.key }}
+
     - name: Install Ollama when needed
       continue-on-error: ${{ inputs.fail-on-llm-error != 'true' }}
       shell: bash
@@ -131,6 +146,7 @@ runs:
         INPUT_DRY_RUN: ${{ inputs.dry-run }}
         INPUT_OUTPUT_FILE: ${{ inputs.output-file }}
         INPUT_TEMPLATE_FILE: ${{ inputs.template-file }}
+        PROJECT_PROFILE_CACHE_FILE: ${{ runner.temp }}/auto-generate-release-note/project-profile.json
       run: node "$GITHUB_ACTION_PATH/dist/index.js"
 
 branding:

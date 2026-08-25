@@ -5,7 +5,7 @@
   "description": "Generate GitHub release notes from Git history with Ollama",
   "type": "module",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js && esbuild src/profile-cache-key.ts --bundle --platform=node --format=esm --outfile=dist/profile-cache-key.js",
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

@@ -1,6 +1,6 @@
 // src/index.ts
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { extname as extname2 } from "node:path";
 
 // src/analysis-plan.ts
@@ -141,6 +141,49 @@ function parseArgs(argv) {
   return options;
 }
 
+// src/final-review.ts
+var evidenceMarkerPattern = /<!--\s*release-note-evidence:\s*([^>]+?)\s*-->/gi;
+function evidenceId(index) {
+  return `G${String(index + 1).padStart(3, "0")}`;
+}
+function buildEvidenceCoverageInstruction(evidenceIds) {
+  const expected = evidenceIds.length > 0 ? evidenceIds.join(",") : "NONE";
+  return [
+    "Reflect every distinct supported release-relevant change from each labeled change group.",
+    `After doing so, append exactly this machine-readable marker as the final line: <!-- release-note-evidence: ${expected} -->`,
+    "Include a group ID in that marker only after its supported changes have been reflected in the notes.",
+    "The marker is validation metadata and must not be explained or placed in a code fence."
+  ].join(" ");
+}
+function validateEvidenceCoverage(draft, expectedIds) {
+  const matches = [...draft.matchAll(evidenceMarkerPattern)];
+  if (matches.length !== 1) {
+    return {
+      valid: false,
+      reason: `expected exactly one evidence marker, found ${matches.length}`
+    };
+  }
+  if (draft.slice(matches[0].index + matches[0][0].length).trim()) {
+    return { valid: false, reason: "evidence marker is not the final line" };
+  }
+  const actual = matches[0][1].split(",").map((value) => value.trim()).filter(Boolean);
+  const expected = expectedIds.length > 0 ? expectedIds : ["NONE"];
+  if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {
+    return {
+      valid: false,
+      reason: `evidence marker was '${actual.join(",")}' instead of '${expected.join(",")}'`
+    };
+  }
+  const publishable = stripEvidenceMarker(draft);
+  if (publishable.length < 20 || !/^#{1,6}\s+\S+/m.test(publishable)) {
+    return { valid: false, reason: "draft does not contain substantive Markdown release notes" };
+  }
+  return { valid: true, reason: "" };
+}
+function stripEvidenceMarker(draft) {
+  return draft.replace(evidenceMarkerPattern, "").trim();
+}
+
 // src/ollama-request.ts
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -220,6 +263,37 @@ function requestOllamaChat({
     request.on("error", (error) => finish(reject, error));
     request.end(body);
   });
+}
+
+// src/project-profile-cache.ts
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+var projectProfileSchema = "project-profile-v1";
+function createProjectProfileCacheKey(model2, repositoryFiles2, contextFiles) {
+  return createHash("sha256").update(
+    JSON.stringify({
+      schema: projectProfileSchema,
+      model: model2,
+      repositoryFiles: repositoryFiles2,
+      contextFiles
+    })
+  ).digest("hex");
+}
+function readCachedProjectProfile(cacheFile, expectedKey) {
+  try {
+    const cached = JSON.parse(readFileSync(cacheFile, "utf8"));
+    if (cached.key === expectedKey && typeof cached.profile === "string" && cached.profile.trim()) {
+      return cached.profile;
+    }
+  } catch {
+  }
+  return "";
+}
+function writeCachedProjectProfile(cacheFile, key, profile) {
+  mkdirSync(dirname(cacheFile), { recursive: true });
+  writeFileSync(cacheFile, `${JSON.stringify({ key, profile })}
+`);
 }
 
 // src/release-tags.ts
@@ -321,6 +395,7 @@ var model = args.model || env.INPUT_MODEL || "qwen2.5-coder:7b-instruct";
 var ollamaHost = (args["ollama-host"] || env.INPUT_OLLAMA_HOST || "http://127.0.0.1:11434").replace(/\/$/, "");
 var outputFile = args["output-file"] || env.INPUT_OUTPUT_FILE;
 var templateFile = args["template-file"] || env.INPUT_TEMPLATE_FILE;
+var projectProfileCacheFile = env.PROJECT_PROFILE_CACHE_FILE || "";
 var requestedLanguage = (args.language || env.INPUT_LANGUAGE || "en").trim().toLowerCase();
 var normalizedLanguage = requestedLanguage === "jp" ? "ja" : requestedLanguage;
 var languageAliases = {
@@ -881,12 +956,17 @@ ${context}`,
     "project-profile"
   );
 }
-async function writeFinalReleaseNotes(languageInstruction, sourceMaterial) {
+async function writeFinalReleaseNotes(languageInstruction, sourceMaterial, evidenceIds) {
+  const coverageInstruction = buildEvidenceCoverageInstruction(evidenceIds);
   let draft;
   try {
-    draft = await runModel(`${languageInstruction}
+    draft = await runModel(
+      `${languageInstruction}
+${coverageInstruction}
 
-${sourceMaterial}`, "final-release-notes");
+${sourceMaterial}`,
+      "final-release-notes"
+    );
   } catch (error) {
     if (!isCapacityError(error)) throw error;
     console.warn(
@@ -906,13 +986,20 @@ ${sourceMaterial}`, "final-release-notes");
     const compactEvidence = await consolidateSummaries(summaries, "final-evidence-consolidation");
     draft = await runModel(
       `${languageInstruction}
+${coverageInstruction}
 
 CONSOLIDATED RELEASE EVIDENCE:
 ${compactEvidence}`,
       "final-release-notes-retry"
     );
   }
-  return runModel(
+  const validation = validateEvidenceCoverage(draft, evidenceIds);
+  if (validation.valid) {
+    console.log("Final release notes passed evidence coverage validation; skipping model review");
+    return stripEvidenceMarker(draft);
+  }
+  console.warn(`::warning::Final release notes require model review: ${validation.reason}`);
+  const reviewed = await runModel(
     [
       `Review and correct this draft for the single target release '${releaseName}'.`,
       `The ref '${comparisonBaseLabel || "none"}' is only the comparison base; never create a release section for it.`,
@@ -921,6 +1008,7 @@ ${compactEvidence}`,
       "A one-item draft is invalid when the evidence contains multiple distinct release-relevant changes.",
       "Delete generic claims such as code cleanup, improved user experience, unspecified fixes, removed deprecated features, dependency-update requirements, breaking changes, or migration steps unless the evidence explicitly proves them.",
       "Prefer concrete behavior and affected components. Preserve the requested language structure and semantic equivalence.",
+      coverageInstruction,
       "Return only the corrected final Markdown.",
       "",
       sourceMaterial,
@@ -930,6 +1018,13 @@ ${compactEvidence}`,
     ].join("\n"),
     "final-release-notes-review"
   );
+  const reviewedValidation = validateEvidenceCoverage(reviewed, evidenceIds);
+  if (!reviewedValidation.valid) {
+    console.warn(
+      `::warning::Reviewed release notes did not return valid coverage metadata: ${reviewedValidation.reason}`
+    );
+  }
+  return stripEvidenceMarker(reviewed);
 }
 async function generateWithModel(comparisonBase, commits2, changedFiles2, excludedFiles2, patches2, metadataChanges2, projectProfile) {
   const tasks = createAnalysisTasks(patches2);
@@ -970,8 +1065,8 @@ async function generateWithModel(comparisonBase, commits2, changedFiles2, exclud
       )
     );
   }
-  const consolidated = await consolidateSummaries(summaries);
-  const detailedAnalyses = summaries.map((summary, index) => `CHANGE GROUP ${index + 1}:
+  const evidenceIds = summaries.map((_, index) => evidenceId(index));
+  const detailedAnalyses = summaries.map((summary, index) => `CHANGE GROUP ${evidenceIds[index]}:
 ${summary}`).join("\n\n");
   const sourceMaterial = `PROJECT PROFILE:
 ${projectProfile}
@@ -985,13 +1080,10 @@ ${changedFiles2}
 CONTENT-EXCLUDED FILES:
 ${excludedFiles2 || "None"}
 
-CONSOLIDATED ANALYSIS:
-${consolidated}
-
 DETAILED GROUP ANALYSES (use these to prevent omissions):
 ${detailedAnalyses}`;
   const languageInstruction = shouldPublishBilingual ? `Write comprehensive bilingual release notes for the single target release ${releaseName}, based on changes since ${comparisonBase || "the repository began"}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. First write a complete English version under the heading '# English'. Then write an equivalent ${targetLanguage} translation under the heading '# ${targetLanguage}', separated from English by a horizontal rule. Keep both versions semantically equivalent. Do not create a separate section for ${comparisonBase || "a previous release"}. Include breaking changes or migration steps only when explicitly supported by evidence.` : `Write comprehensive release notes in ${targetLanguage} only for the single target release ${releaseName}, based on changes since ${comparisonBase || "the repository began"}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. Do not duplicate or translate the notes into another language. Do not create a separate section for ${comparisonBase || "a previous release"}. Include breaking changes or migration steps only when explicitly supported by evidence.`;
-  return writeFinalReleaseNotes(languageInstruction, sourceMaterial);
+  return writeFinalReleaseNotes(languageInstruction, sourceMaterial, evidenceIds);
 }
 if (!dryRun) git("fetch", "--force", "--tags", "--prune", "origin");
 var comparisonTargetRef = resolveGitRef(comparisonTarget);
@@ -1027,7 +1119,25 @@ var notes;
 var usedLlm = true;
 try {
   await verifyOllama();
-  const projectProfile = await buildProjectProfile(repositoryFiles);
+  const projectContextFiles = selectProjectContextFiles(repositoryFiles).map((path) => ({
+    path,
+    content: git("show", `${resolvedComparisonTarget}:${path}`)
+  }));
+  const projectProfileCacheKey = createProjectProfileCacheKey(
+    model,
+    repositoryFiles,
+    projectContextFiles
+  );
+  let projectProfile = projectProfileCacheFile ? readCachedProjectProfile(projectProfileCacheFile, projectProfileCacheKey) : "";
+  if (projectProfile) {
+    console.log("Using cached project profile for unchanged project context");
+  } else {
+    projectProfile = await buildProjectProfile(repositoryFiles);
+    if (projectProfileCacheFile) {
+      writeCachedProjectProfile(projectProfileCacheFile, projectProfileCacheKey, projectProfile);
+      console.log("Cached project profile for reuse with unchanged project context");
+    }
+  }
   notes = await generateWithModel(
     comparisonBaseLabel,
     commits,
@@ -1044,7 +1154,7 @@ try {
   notes = fallbackNotes(comparisonBaseLabel, commits, changedFiles);
 }
 if (templateFile) {
-  const template = readFileSync(templateFile, "utf8");
+  const template = readFileSync2(templateFile, "utf8");
   if (!template.trim()) throw new Error(`Template file is empty: ${templateFile}`);
   const generatedNotes = notes;
   const populatedTemplate = await runModel(
@@ -1065,7 +1175,7 @@ if (templateFile) {
   }
 }
 if (outputFile) {
-  writeFileSync(outputFile, `${notes}
+  writeFileSync2(outputFile, `${notes}
 `);
   console.log(`Wrote release-note preview to ${outputFile}`);
 }
