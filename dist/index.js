@@ -47,19 +47,9 @@ function selectRelevantContextFiles(paths, changedPaths) {
     return !directory || changedPaths.some((changedPath) => changedPath.startsWith(`${directory}/`));
   });
 }
-function splitEvidence(evidence) {
-  const lines = evidence.split("\n");
-  if (lines.length < 2) {
-    const middle2 = Math.ceil(evidence.length / 2);
-    return [evidence.slice(0, middle2), evidence.slice(middle2)].filter(Boolean);
-  }
-  const middle = Math.ceil(lines.length / 2);
-  return [lines.slice(0, middle).join("\n"), lines.slice(middle).join("\n")].filter(Boolean);
-}
 function outputTokenBudget(stage) {
   if (stage.startsWith("final-release-notes-template")) return 4096;
   if (stage.startsWith("final-release-notes")) return 2048;
-  if (stage.startsWith("evidence-selection") || stage.startsWith("capacity-analysis")) return 1024;
   return 768;
 }
 
@@ -70,7 +60,7 @@ function unique(values) {
 function matches(source, pattern) {
   return [...source.matchAll(pattern)].map((match) => match[1] || match[0]);
 }
-function extractSignals(lines) {
+function extractSignals(lines, filePath) {
   const changed = lines.filter((line) => /^[+-]/.test(line) && !/^(\+\+\+|---)/.test(line)).map((line) => line.slice(1));
   const source = changed.join("\n");
   const declarations = matches(
@@ -89,7 +79,7 @@ function extractSignals(lines) {
   const testNames = matches(source, /\b(?:describe|it|test)\s*\(\s*["'`]([^"'`]+)["'`]/g);
   const routes = matches(source, /["'`]((?:\/api\/|\/)[A-Za-z0-9_./:{}-]+)["'`]/g);
   const imports = changed.filter((line) => /^\s*(?:import|export\s+.+\s+from|from|use|#include)\b/.test(line)).map((line) => line.trim());
-  return unique([
+  const signals = unique([
     ...declarations.map((value) => `declaration:${value}`),
     ...exports.map((value) => `public:${value}`),
     ...keys.map((value) => `key:${value}`),
@@ -98,6 +88,60 @@ function extractSignals(lines) {
     ...routes.map((value) => `route:${value}`),
     ...imports.map((value) => `module:${value}`)
   ]);
+  if (/(?:^|\/)(?:test|tests|__tests__)(?:\/|$)|\.(?:spec|test)\.[^/]+$/i.test(filePath)) {
+    return signals.filter((signal) => /^(?:test|option|route):/.test(signal));
+  }
+  return signals;
+}
+function extractSemanticEvidence(lines, filePath) {
+  const changed = lines.filter((line) => /^[+-]/.test(line) && !/^(\+\+\+|---)/.test(line)).map((line) => ({ operation: line[0], source: line.slice(1) }));
+  const groups = /* @__PURE__ */ new Map();
+  const isDocumentation = /\.(?:md|mdx)$/i.test(filePath);
+  const isTest = /(?:^|\/)(?:test|tests|__tests__)(?:\/|$)|\.(?:spec|test)\.[^/]+$/i.test(filePath);
+  const add = (label, value) => {
+    const normalized = value.trim().replace(/\s+/g, " ").replace(/[;,]$/, "");
+    if (!normalized) return;
+    groups.set(label, unique([...groups.get(label) || [], normalized]));
+  };
+  for (const { operation, source } of changed) {
+    const value = source.trim().replace(/\s+/g, " ");
+    if (!value || /^[{}()[\],;]+$/.test(value)) continue;
+    const kind = operation === "+" ? "added" : "removed";
+    const declaration = value.match(
+      /\b(?:class|interface|type|enum|function|def|fn|func|struct|trait|const|let|var)\s+([A-Za-z_$][\w$]*)/
+    );
+    const assignment = value.match(/^([A-Za-z_$][\w$.-]*)\s*[:=]/);
+    const call = value.match(/\b([A-Za-z_$][\w$.]*)\s*\(/);
+    const heading = value.match(/^#{1,6}\s+(.+)/);
+    if (declaration && /\b(?:export|public)\b/.test(value)) {
+      add(`${kind} public declarations`, declaration[1]);
+    }
+    if (assignment && /^(?:module\.exports|exports\.|public\b)/.test(value)) {
+      add(`${kind} public assigned values`, assignment[1]);
+    }
+    if (/^(?:return|throw|raise)\b/.test(value)) add(`${kind} outcomes`, value.split(/[ (]/)[0]);
+    if (/^(?:if|else if|switch|case|when|while|for)\b/.test(value)) {
+      add(`${kind} control flow`, value.split(/[ (]/)[0]);
+    }
+    if (heading) add(`${kind} documentation sections`, heading[1]);
+    if (call && !declaration && !isTest && !/^(?:if|for|while|switch|catch)$/.test(call[1])) {
+      add(`${kind} calls`, call[1].replace(/\d+$/, "#"));
+    }
+    for (const match of value.matchAll(/["'`]([^"'`\n]{3,})["'`]/g)) {
+      const literal = match[1];
+      if (!isTest && (/^(?:--|\/|https?:\/\/|INPUT_|GITHUB_)/.test(literal) || /(?:\bthrow\b|\braise\b|\bnew\s+Error\s*\(|\bError\s*\()/i.test(value) && /\b(?:error|failed|cannot|must|required|deprecated|unsupported|invalid)\b/i.test(
+        literal
+      ))) {
+        add(`${kind} externally meaningful literals`, literal);
+      }
+    }
+    if (isDocumentation) {
+      for (const inlineCode of value.matchAll(/`([^`]+)`/g)) {
+        add(`${kind} documented identifiers`, inlineCode[1]);
+      }
+    }
+  }
+  return [...groups].map(([label, values]) => `${label}: ${values.join(", ")}`);
 }
 function patchHunks(patch) {
   const lines = patch.content.split("\n");
@@ -133,9 +177,8 @@ function buildChangeIndex(patches2, metadataChanges2) {
         header: hunk.header,
         additions,
         deletions,
-        signals: extractSignals(hunk.lines),
-        content: `FILE: ${patch.filePath}
-${hunk.lines.join("\n")}`
+        signals: extractSignals(hunk.lines, patch.filePath),
+        evidence: extractSemanticEvidence(hunk.lines, patch.filePath)
       });
     }
   }
@@ -147,8 +190,7 @@ ${hunk.lines.join("\n")}`
       additions: 0,
       deletions: 0,
       signals: unique(metadataChanges2.split("\n").map((line) => `metadata:${line.trim()}`)),
-      content: `METADATA-ONLY CHANGES:
-${metadataChanges2}`
+      evidence: unique(metadataChanges2.split("\n").map((line) => line.trim()))
     });
   }
   for (const [index, entry] of entries.entries()) {
@@ -156,15 +198,34 @@ ${metadataChanges2}`
   }
   return entries;
 }
-function formatChangeIndexEntry(entry) {
-  return [
-    `${entry.id} | ${entry.filePath} | +${entry.additions}/-${entry.deletions} | ${entry.header}`,
-    `signals: ${entry.signals.join(" ; ") || "none; inspect this hunk if its behavior matters"}`,
-    `full-diff-chars: ${entry.content.length}`
-  ].join("\n");
+function formatSignals(signals) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const signal of signals) {
+    const separator = signal.indexOf(":");
+    const kind = separator < 0 ? "other" : signal.slice(0, separator);
+    const value = separator < 0 ? signal : signal.slice(separator + 1);
+    groups.set(kind, unique([...groups.get(kind) || [], value]));
+  }
+  return [...groups].map(([kind, values]) => `${kind}: ${values.join(", ")}`).join(" ; ") || "no named symbol or configuration signal";
 }
 function formatChangeIndex(entries) {
-  return entries.map(formatChangeIndexEntry).join("\n\n") || "No diff hunks are available.";
+  const files = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    files.set(entry.filePath, [...files.get(entry.filePath) || [], entry]);
+  }
+  return [...files].map(([filePath, fileEntries]) => {
+    const hunks = fileEntries.map(
+      ({ id, additions, deletions, header }) => `${id} +${additions}/-${deletions} ${header}`
+    ).join(" | ");
+    const signals = unique(fileEntries.flatMap(({ signals: signals2 }) => signals2));
+    const evidence = unique(fileEntries.flatMap(({ evidence: evidence2 }) => evidence2));
+    return [
+      `FILE: ${filePath}`,
+      `hunks: ${hunks}`,
+      `signals: ${formatSignals(signals)}`,
+      `semantic changes: ${evidence.join(" ; ") || "implementation changed within the named scopes"}`
+    ].join("\n");
+  }).join("\n\n") || "No diff hunks are available.";
 }
 function buildContextDigest(files) {
   return files.map(({ path, content }) => {
@@ -197,17 +258,6 @@ ${JSON.stringify(digest)}`;
     return `CONTEXT: ${path}
 ${facts.join("\n")}`;
   }).filter((value) => !value.endsWith("\n")).join("\n\n") || "No unchanged project context was needed.";
-}
-function parseEvidenceSelection(response, availableIds) {
-  const cleaned = response.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  const parsed = JSON.parse(cleaned);
-  if (!Array.isArray(parsed.selected_ids)) {
-    throw new Error("Evidence selection did not contain selected_ids");
-  }
-  const available = new Set(availableIds);
-  return unique(parsed.selected_ids.filter((id) => typeof id === "string")).filter(
-    (id) => available.has(id)
-  );
 }
 
 // src/cli.ts
@@ -893,114 +943,14 @@ async function runModel(userPrompt, stage, responseFormat) {
   );
   return result;
 }
-function isCapacityError(error) {
-  return /context|token|too (?:large|long)|input.{0,20}long|memory|allocate|model runner|empty response/i.test(
-    formatError(error)
-  );
-}
-async function summarizeWithCapacityFallback(instructions, evidenceParts, stage) {
-  const evidence = evidenceParts.join("\n\n");
-  try {
-    return await runModel(`${instructions}
-
-${evidence}`, stage);
-  } catch (error) {
-    const parts = evidenceParts.length > 1 ? [
-      evidenceParts.slice(0, Math.ceil(evidenceParts.length / 2)),
-      evidenceParts.slice(Math.ceil(evidenceParts.length / 2))
-    ] : splitEvidence(evidence).map((part) => [part]);
-    if (!isCapacityError(error) || parts.length < 2) throw error;
-    console.warn(
-      `::warning::${stage} exceeded the local model's available capacity; retrying its complete evidence in ${parts.length} parts.`
-    );
-    const summaries = [];
-    for (const [index, part] of parts.entries()) {
-      summaries.push(
-        await summarizeWithCapacityFallback(
-          `${instructions}
-This is part ${index + 1}/${parts.length}; extract its facts independently for final assembly.`,
-          part,
-          `${stage}-part-${index + 1}`
-        )
-      );
-    }
-    return summaries.map((summary, index) => `PART ${index + 1}/${summaries.length}:
-${summary}`).join("\n\n");
-  }
-}
-var evidenceSelectionFormat = {
-  type: "object",
-  properties: {
-    selected_ids: {
-      type: "array",
-      items: { type: "string" }
-    }
-  },
-  required: ["selected_ids"],
-  additionalProperties: false
-};
-async function selectDetailedEvidence(entries, selectionContext, stage = "evidence-selection") {
-  if (entries.length === 0) return [];
-  let response;
-  try {
-    response = await runModel(
-      [
-        "Select the diff hunk IDs whose full source is necessary to write accurate release notes.",
-        "The index includes every changed hunk. Commit messages and paths may be inaccurate, so use changed declarations, public symbols, configuration keys, options, routes, tests, imports, and hunk scopes as evidence.",
-        "Select a hunk when the compact index is insufficient to determine its behavior or impact. Select ambiguous implementation changes rather than guessing.",
-        "Do not select generated outputs or tests when their related implementation, documentation, or configuration already explains the same change, unless they provide necessary evidence.",
-        "Choose only evidence needed for release notes; do not perform a code review and do not write release-note prose.",
-        selectionContext,
-        "",
-        "CHANGE HUNK INDEX:",
-        entries.map(formatChangeIndexEntry).join("\n\n")
-      ].join("\n"),
-      stage,
-      evidenceSelectionFormat
-    );
-  } catch (error) {
-    if (!isCapacityError(error)) throw error;
-    if (entries.length === 1) {
-      console.warn(
-        `::warning::${stage} could not fit one index entry; reading ${entries[0].id} in full.`
-      );
-      return [entries[0].id];
-    }
-    const middle = Math.ceil(entries.length / 2);
-    console.warn(
-      `::warning::${stage} exceeded the local model's available capacity; selecting evidence from two complete index partitions.`
-    );
-    const left = await selectDetailedEvidence(
-      entries.slice(0, middle),
-      selectionContext,
-      `${stage}-part-1`
-    );
-    const right = await selectDetailedEvidence(
-      entries.slice(middle),
-      selectionContext,
-      `${stage}-part-2`
-    );
-    return [.../* @__PURE__ */ new Set([...left, ...right])];
-  }
-  try {
-    return parseEvidenceSelection(
-      response,
-      entries.map(({ id }) => id)
-    );
-  } catch (error) {
-    console.warn(
-      `::warning::Could not parse ${stage}; reading all ${entries.length} indexed hunks. (${formatError(error)})`
-    );
-    return entries.map(({ id }) => id);
-  }
-}
-function finalReleaseNotesPrompt(comparisonBase, commits2, changedFiles2, excludedFiles2, contextDigest, changeIndex, selectedEvidence, selectedEvidenceLabel = "SELECTED FULL DIFF HUNKS") {
+function finalReleaseNotesPrompt(comparisonBase, commits2, changedFiles2, excludedFiles2, contextDigest, semanticDigest) {
   const languageInstruction = shouldPublishBilingual ? `Write useful bilingual release notes for the single target release ${releaseName}. First write a complete English version under '# English', then an equivalent ${targetLanguage} translation under '# ${targetLanguage}', separated by a horizontal rule. Keep both versions semantically equivalent.` : `Write useful release notes in ${targetLanguage} only for the single target release ${releaseName}. Do not duplicate or translate the notes into another language.`;
   const outputInstruction = template ? buildTemplateReleaseNotesInstruction(template, releaseName) : "Return only the final Markdown release notes, without a code fence around the whole response.";
   return [
     languageInstruction,
     `The ref '${comparisonBase || "none"}' is only the comparison base; do not create a release section for it.`,
-    "Use the compact index to account for the complete change set and the selected detailed evidence to resolve behavior that could not be inferred safely.",
+    "Use the local semantic digest to account for the complete change set. It describes every diff hunk without copying implementation bodies.",
+    "Commit subjects and file paths are supporting evidence, not guaranteed descriptions. Phrase ambiguous internal impact cautiously instead of requesting more source or performing a code review.",
     "Describe concrete user-visible changes, fixes, compatibility or migration needs, and useful maintainer changes. Merge evidence for the same underlying change and omit unsupported claims.",
     "Tests, documentation, manifests, and generated outputs may support an implementation change; do not present them as separate features unless they independently change user or maintainer behavior.",
     "",
@@ -1016,11 +966,8 @@ ${excludedFiles2 || "None"}`,
     `PROJECT CONTEXT DIGEST:
 ${contextDigest}`,
     "",
-    `COMPLETE CHANGE HUNK INDEX:
-${changeIndex}`,
-    "",
-    `${selectedEvidenceLabel}:
-${selectedEvidence || "No full hunks were needed."}`,
+    `COMPLETE SEMANTIC CHANGE DIGEST:
+${semanticDigest}`,
     "",
     `OUTPUT REQUIREMENTS:
 ${outputInstruction}`
@@ -1028,73 +975,23 @@ ${outputInstruction}`
 }
 async function generateWithModel(comparisonBase, commits2, changedFiles2, excludedFiles2, patches2, metadataChanges2, contextFiles) {
   const entries = buildChangeIndex(patches2, metadataChanges2);
-  const changeIndex = formatChangeIndex(entries);
+  const semanticDigest = formatChangeIndex(entries);
   const contextDigest = buildContextDigest(contextFiles);
-  const selectionContext = [
-    `Release: ${releaseName}`,
-    `Comparison base: ${comparisonBase || "the repository began"}`,
-    `Commits:
-${commits2 || "No commit subjects are available."}`,
-    `Changed-file summary:
-${changedFiles2 || "No changed-file statistics are available."}`,
-    `Project context digest:
-${contextDigest}`
-  ].join("\n\n");
-  const selectedIds = await selectDetailedEvidence(entries, selectionContext);
-  const selected = new Set(selectedIds);
-  const selectedEntries = entries.filter(({ id }) => selected.has(id));
-  const selectedEvidence = selectedEntries.map(({ id, content }) => `SELECTED HUNK ${id}:
-${content}`).join("\n\n");
   console.log(
-    `Selected ${selectedEntries.length}/${entries.length} indexed diff hunks for detailed reading: ${selectedIds.join(", ") || "none"}`
+    `Built local semantic digest for ${entries.length} diff hunks: source-chars=${patches2.reduce((total, patch) => total + patch.content.length, 0)} digest-chars=${semanticDigest.length}`
   );
   const stage = template ? "final-release-notes-template" : "final-release-notes";
-  try {
-    return await runModel(
-      finalReleaseNotesPrompt(
-        comparisonBase,
-        commits2,
-        changedFiles2,
-        excludedFiles2,
-        contextDigest,
-        changeIndex,
-        selectedEvidence
-      ),
-      stage
-    );
-  } catch (error) {
-    if (!isCapacityError(error)) throw error;
-    console.warn(
-      "::warning::Indexed and selected evidence exceeded the local model capacity; extracting its facts in complete parts before retrying final generation."
-    );
-    const capacityFacts = await summarizeWithCapacityFallback(
-      [
-        `Extract concise factual release-note evidence for release '${releaseName}' from this complete indexed and selected evidence.`,
-        "Preserve distinct behavior, fixes, compatibility or migration needs, and important maintainer changes. Do not write final release notes and do not invent facts."
-      ].join(" "),
-      [
-        `PROJECT CONTEXT DIGEST:
-${contextDigest}`,
-        ...entries.map(formatChangeIndexEntry),
-        ...selectedEntries.map(({ id, content }) => `SELECTED HUNK ${id}:
-${content}`)
-      ],
-      "capacity-analysis"
-    );
-    return runModel(
-      finalReleaseNotesPrompt(
-        comparisonBase,
-        commits2,
-        changedFiles2,
-        excludedFiles2,
-        contextDigest,
-        "The complete change index was processed in capacity-safe parts.",
-        capacityFacts,
-        "FACTS EXTRACTED FROM COMPLETE INDEXED AND SELECTED EVIDENCE"
-      ),
-      `${stage}-capacity-retry`
-    );
-  }
+  return runModel(
+    finalReleaseNotesPrompt(
+      comparisonBase,
+      commits2,
+      changedFiles2,
+      excludedFiles2,
+      contextDigest,
+      semanticDigest
+    ),
+    stage
+  );
 }
 if (!dryRun) git("fetch", "--force", "--tags", "--prune", "origin");
 var comparisonTargetRef = resolveGitRef(comparisonTarget);

@@ -5,15 +5,8 @@ import {
   outputTokenBudget,
   selectRelevantContextFiles,
   shouldAnalyzeAsMetadata,
-  splitEvidence,
 } from './analysis-plan.js';
-import {
-  buildChangeIndex,
-  buildContextDigest,
-  formatChangeIndex,
-  formatChangeIndexEntry,
-  parseEvidenceSelection,
-} from './change-index.js';
+import { buildChangeIndex, buildContextDigest, formatChangeIndex } from './change-index.js';
 import { helpText, parseArgs } from './cli.js';
 import { requestOllamaChat } from './ollama-request.js';
 import { isReleaseTag } from './release-tags.js';
@@ -571,122 +564,13 @@ async function runModel(userPrompt, stage, responseFormat?) {
   return result;
 }
 
-function isCapacityError(error) {
-  return /context|token|too (?:large|long)|input.{0,20}long|memory|allocate|model runner|empty response/i.test(
-    formatError(error)
-  );
-}
-
-async function summarizeWithCapacityFallback(instructions, evidenceParts, stage) {
-  const evidence = evidenceParts.join('\n\n');
-  try {
-    return await runModel(`${instructions}\n\n${evidence}`, stage);
-  } catch (error) {
-    const parts =
-      evidenceParts.length > 1
-        ? [
-            evidenceParts.slice(0, Math.ceil(evidenceParts.length / 2)),
-            evidenceParts.slice(Math.ceil(evidenceParts.length / 2)),
-          ]
-        : splitEvidence(evidence).map((part) => [part]);
-    if (!isCapacityError(error) || parts.length < 2) throw error;
-    console.warn(
-      `::warning::${stage} exceeded the local model's available capacity; retrying its complete evidence in ${parts.length} parts.`
-    );
-    const summaries = [];
-    for (const [index, part] of parts.entries()) {
-      summaries.push(
-        await summarizeWithCapacityFallback(
-          `${instructions}\nThis is part ${index + 1}/${parts.length}; extract its facts independently for final assembly.`,
-          part,
-          `${stage}-part-${index + 1}`
-        )
-      );
-    }
-    return summaries
-      .map((summary, index) => `PART ${index + 1}/${summaries.length}:\n${summary}`)
-      .join('\n\n');
-  }
-}
-
-const evidenceSelectionFormat = {
-  type: 'object',
-  properties: {
-    selected_ids: {
-      type: 'array',
-      items: { type: 'string' },
-    },
-  },
-  required: ['selected_ids'],
-  additionalProperties: false,
-};
-
-async function selectDetailedEvidence(entries, selectionContext, stage = 'evidence-selection') {
-  if (entries.length === 0) return [];
-  let response;
-  try {
-    response = await runModel(
-      [
-        'Select the diff hunk IDs whose full source is necessary to write accurate release notes.',
-        'The index includes every changed hunk. Commit messages and paths may be inaccurate, so use changed declarations, public symbols, configuration keys, options, routes, tests, imports, and hunk scopes as evidence.',
-        'Select a hunk when the compact index is insufficient to determine its behavior or impact. Select ambiguous implementation changes rather than guessing.',
-        'Do not select generated outputs or tests when their related implementation, documentation, or configuration already explains the same change, unless they provide necessary evidence.',
-        'Choose only evidence needed for release notes; do not perform a code review and do not write release-note prose.',
-        selectionContext,
-        '',
-        'CHANGE HUNK INDEX:',
-        entries.map(formatChangeIndexEntry).join('\n\n'),
-      ].join('\n'),
-      stage,
-      evidenceSelectionFormat
-    );
-  } catch (error) {
-    if (!isCapacityError(error)) throw error;
-    if (entries.length === 1) {
-      console.warn(
-        `::warning::${stage} could not fit one index entry; reading ${entries[0].id} in full.`
-      );
-      return [entries[0].id];
-    }
-    const middle = Math.ceil(entries.length / 2);
-    console.warn(
-      `::warning::${stage} exceeded the local model's available capacity; selecting evidence from two complete index partitions.`
-    );
-    const left = await selectDetailedEvidence(
-      entries.slice(0, middle),
-      selectionContext,
-      `${stage}-part-1`
-    );
-    const right = await selectDetailedEvidence(
-      entries.slice(middle),
-      selectionContext,
-      `${stage}-part-2`
-    );
-    return [...new Set([...left, ...right])];
-  }
-
-  try {
-    return parseEvidenceSelection(
-      response,
-      entries.map(({ id }) => id)
-    );
-  } catch (error) {
-    console.warn(
-      `::warning::Could not parse ${stage}; reading all ${entries.length} indexed hunks. (${formatError(error)})`
-    );
-    return entries.map(({ id }) => id);
-  }
-}
-
 function finalReleaseNotesPrompt(
   comparisonBase,
   commits,
   changedFiles,
   excludedFiles,
   contextDigest,
-  changeIndex,
-  selectedEvidence,
-  selectedEvidenceLabel = 'SELECTED FULL DIFF HUNKS'
+  semanticDigest
 ) {
   const languageInstruction = shouldPublishBilingual
     ? `Write useful bilingual release notes for the single target release ${releaseName}. First write a complete English version under '# English', then an equivalent ${targetLanguage} translation under '# ${targetLanguage}', separated by a horizontal rule. Keep both versions semantically equivalent.`
@@ -697,7 +581,8 @@ function finalReleaseNotesPrompt(
   return [
     languageInstruction,
     `The ref '${comparisonBase || 'none'}' is only the comparison base; do not create a release section for it.`,
-    'Use the compact index to account for the complete change set and the selected detailed evidence to resolve behavior that could not be inferred safely.',
+    'Use the local semantic digest to account for the complete change set. It describes every diff hunk without copying implementation bodies.',
+    'Commit subjects and file paths are supporting evidence, not guaranteed descriptions. Phrase ambiguous internal impact cautiously instead of requesting more source or performing a code review.',
     'Describe concrete user-visible changes, fixes, compatibility or migration needs, and useful maintainer changes. Merge evidence for the same underlying change and omit unsupported claims.',
     'Tests, documentation, manifests, and generated outputs may support an implementation change; do not present them as separate features unless they independently change user or maintainer behavior.',
     '',
@@ -709,9 +594,7 @@ function finalReleaseNotesPrompt(
     '',
     `PROJECT CONTEXT DIGEST:\n${contextDigest}`,
     '',
-    `COMPLETE CHANGE HUNK INDEX:\n${changeIndex}`,
-    '',
-    `${selectedEvidenceLabel}:\n${selectedEvidence || 'No full hunks were needed.'}`,
+    `COMPLETE SEMANTIC CHANGE DIGEST:\n${semanticDigest}`,
     '',
     `OUTPUT REQUIREMENTS:\n${outputInstruction}`,
   ].join('\n');
@@ -727,70 +610,24 @@ async function generateWithModel(
   contextFiles
 ) {
   const entries = buildChangeIndex(patches, metadataChanges);
-  const changeIndex = formatChangeIndex(entries);
+  const semanticDigest = formatChangeIndex(entries);
   const contextDigest = buildContextDigest(contextFiles);
-  const selectionContext = [
-    `Release: ${releaseName}`,
-    `Comparison base: ${comparisonBase || 'the repository began'}`,
-    `Commits:\n${commits || 'No commit subjects are available.'}`,
-    `Changed-file summary:\n${changedFiles || 'No changed-file statistics are available.'}`,
-    `Project context digest:\n${contextDigest}`,
-  ].join('\n\n');
-  const selectedIds = await selectDetailedEvidence(entries, selectionContext);
-  const selected = new Set(selectedIds);
-  const selectedEntries = entries.filter(({ id }) => selected.has(id));
-  const selectedEvidence = selectedEntries
-    .map(({ id, content }) => `SELECTED HUNK ${id}:\n${content}`)
-    .join('\n\n');
   console.log(
-    `Selected ${selectedEntries.length}/${entries.length} indexed diff hunks for detailed reading: ${selectedIds.join(', ') || 'none'}`
+    `Built local semantic digest for ${entries.length} diff hunks: source-chars=${patches.reduce((total, patch) => total + patch.content.length, 0)} digest-chars=${semanticDigest.length}`
   );
 
   const stage = template ? 'final-release-notes-template' : 'final-release-notes';
-  try {
-    return await runModel(
-      finalReleaseNotesPrompt(
-        comparisonBase,
-        commits,
-        changedFiles,
-        excludedFiles,
-        contextDigest,
-        changeIndex,
-        selectedEvidence
-      ),
-      stage
-    );
-  } catch (error) {
-    if (!isCapacityError(error)) throw error;
-    console.warn(
-      '::warning::Indexed and selected evidence exceeded the local model capacity; extracting its facts in complete parts before retrying final generation.'
-    );
-    const capacityFacts = await summarizeWithCapacityFallback(
-      [
-        `Extract concise factual release-note evidence for release '${releaseName}' from this complete indexed and selected evidence.`,
-        'Preserve distinct behavior, fixes, compatibility or migration needs, and important maintainer changes. Do not write final release notes and do not invent facts.',
-      ].join(' '),
-      [
-        `PROJECT CONTEXT DIGEST:\n${contextDigest}`,
-        ...entries.map(formatChangeIndexEntry),
-        ...selectedEntries.map(({ id, content }) => `SELECTED HUNK ${id}:\n${content}`),
-      ],
-      'capacity-analysis'
-    );
-    return runModel(
-      finalReleaseNotesPrompt(
-        comparisonBase,
-        commits,
-        changedFiles,
-        excludedFiles,
-        contextDigest,
-        'The complete change index was processed in capacity-safe parts.',
-        capacityFacts,
-        'FACTS EXTRACTED FROM COMPLETE INDEXED AND SELECTED EVIDENCE'
-      ),
-      `${stage}-capacity-retry`
-    );
-  }
+  return runModel(
+    finalReleaseNotesPrompt(
+      comparisonBase,
+      commits,
+      changedFiles,
+      excludedFiles,
+      contextDigest,
+      semanticDigest
+    ),
+    stage
+  );
 }
 
 if (!dryRun) git('fetch', '--force', '--tags', '--prune', 'origin');

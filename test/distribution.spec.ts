@@ -16,14 +16,14 @@ describe('GitHub Action distribution', () => {
     assert.doesNotMatch(metadata, /num-ctx/);
   });
 
-  it('selects indexed evidence before direct final writing', () => {
+  it('uses one final model call over a locally built semantic digest', () => {
     const source = readFileSync('src/index.ts', 'utf8');
-    assert.match(source, /'evidence-selection'/);
-    assert.match(source, /Selected \$\{selectedEntries\.length\}\/\$\{entries\.length\}/);
+    assert.match(source, /Built local semantic digest/);
+    assert.match(source, /COMPLETE SEMANTIC CHANGE DIGEST/);
     assert.match(source, /buildTemplateReleaseNotesInstruction\(template, releaseName\)/);
     assert.doesNotMatch(
       source,
-      /project-profile|final-release-notes-review|release-template-review|change-analysis/
+      /evidence-selection|selectDetailedEvidence|SELECTED FULL DIFF|capacity-analysis|project-profile|final-release-notes-review|release-template-review|change-analysis/
     );
     assert.doesNotMatch(readFileSync('action.yml', 'utf8'), /actions\/cache|profile-cache/);
   });

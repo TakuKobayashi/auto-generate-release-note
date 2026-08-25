@@ -4,16 +4,9 @@ import {
   outputTokenBudget,
   selectRelevantContextFiles,
   shouldAnalyzeAsMetadata,
-  splitEvidence,
 } from '../src/analysis-plan.js';
 
 describe('change analysis planning', () => {
-  it('splits rejected evidence without dropping content', () => {
-    const evidence = Array.from({ length: 20 }, (_, index) => `line-${index}`).join('\n');
-    const parts = splitEvidence(evidence);
-    assert.equal(parts.join('\n'), evidence);
-  });
-
   it('recognizes files represented by metadata instead of bulk contents', () => {
     assert.equal(shouldAnalyzeAsMetadata('pnpm-lock.yaml'), true);
     assert.equal(shouldAnalyzeAsMetadata('Assets/Scenes/Main.unity'), true);
@@ -43,10 +36,8 @@ describe('change analysis planning', () => {
     ]);
   });
 
-  it('allows a compact evidence selection and a complete templated final response', () => {
-    assert.equal(outputTokenBudget('evidence-selection'), 1024);
+  it('allows complete final and templated responses', () => {
     assert.equal(outputTokenBudget('final-release-notes'), 2048);
     assert.equal(outputTokenBudget('final-release-notes-template'), 4096);
-    assert.equal(outputTokenBudget('final-release-notes-template-capacity-retry'), 4096);
   });
 });

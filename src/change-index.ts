@@ -7,7 +7,7 @@ export type ChangeIndexEntry = {
   additions: number;
   deletions: number;
   signals: string[];
-  content: string;
+  evidence: string[];
 };
 
 function unique(values: string[]) {
@@ -18,7 +18,7 @@ function matches(source: string, pattern: RegExp) {
   return [...source.matchAll(pattern)].map((match) => match[1] || match[0]);
 }
 
-function extractSignals(lines: string[]) {
+function extractSignals(lines: string[], filePath: string) {
   const changed = lines
     .filter((line) => /^[+-]/.test(line) && !/^(\+\+\+|---)/.test(line))
     .map((line) => line.slice(1));
@@ -42,7 +42,7 @@ function extractSignals(lines: string[]) {
     .filter((line) => /^\s*(?:import|export\s+.+\s+from|from|use|#include)\b/.test(line))
     .map((line) => line.trim());
 
-  return unique([
+  const signals = unique([
     ...declarations.map((value) => `declaration:${value}`),
     ...exports.map((value) => `public:${value}`),
     ...keys.map((value) => `key:${value}`),
@@ -51,6 +51,72 @@ function extractSignals(lines: string[]) {
     ...routes.map((value) => `route:${value}`),
     ...imports.map((value) => `module:${value}`),
   ]);
+  if (/(?:^|\/)(?:test|tests|__tests__)(?:\/|$)|\.(?:spec|test)\.[^/]+$/i.test(filePath)) {
+    return signals.filter((signal) => /^(?:test|option|route):/.test(signal));
+  }
+  return signals;
+}
+
+function extractSemanticEvidence(lines: string[], filePath: string) {
+  const changed = lines
+    .filter((line) => /^[+-]/.test(line) && !/^(\+\+\+|---)/.test(line))
+    .map((line) => ({ operation: line[0], source: line.slice(1) }));
+  const groups = new Map<string, string[]>();
+  const isDocumentation = /\.(?:md|mdx)$/i.test(filePath);
+  const isTest = /(?:^|\/)(?:test|tests|__tests__)(?:\/|$)|\.(?:spec|test)\.[^/]+$/i.test(filePath);
+  const add = (label: string, value: string) => {
+    const normalized = value.trim().replace(/\s+/g, ' ').replace(/[;,]$/, '');
+    if (!normalized) return;
+    groups.set(label, unique([...(groups.get(label) || []), normalized]));
+  };
+
+  for (const { operation, source } of changed) {
+    const value = source.trim().replace(/\s+/g, ' ');
+    if (!value || /^[{}()[\],;]+$/.test(value)) continue;
+    const kind = operation === '+' ? 'added' : 'removed';
+    const declaration = value.match(
+      /\b(?:class|interface|type|enum|function|def|fn|func|struct|trait|const|let|var)\s+([A-Za-z_$][\w$]*)/
+    );
+    const assignment = value.match(/^([A-Za-z_$][\w$.-]*)\s*[:=]/);
+    const call = value.match(/\b([A-Za-z_$][\w$.]*)\s*\(/);
+    const heading = value.match(/^#{1,6}\s+(.+)/);
+
+    if (declaration && /\b(?:export|public)\b/.test(value)) {
+      add(`${kind} public declarations`, declaration[1]);
+    }
+    if (assignment && /^(?:module\.exports|exports\.|public\b)/.test(value)) {
+      add(`${kind} public assigned values`, assignment[1]);
+    }
+    if (/^(?:return|throw|raise)\b/.test(value)) add(`${kind} outcomes`, value.split(/[ (]/)[0]);
+    if (/^(?:if|else if|switch|case|when|while|for)\b/.test(value)) {
+      add(`${kind} control flow`, value.split(/[ (]/)[0]);
+    }
+    if (heading) add(`${kind} documentation sections`, heading[1]);
+    if (call && !declaration && !isTest && !/^(?:if|for|while|switch|catch)$/.test(call[1])) {
+      add(`${kind} calls`, call[1].replace(/\d+$/, '#'));
+    }
+
+    for (const match of value.matchAll(/["'`]([^"'`\n]{3,})["'`]/g)) {
+      const literal = match[1];
+      if (
+        !isTest &&
+        (/^(?:--|\/|https?:\/\/|INPUT_|GITHUB_)/.test(literal) ||
+          (/(?:\bthrow\b|\braise\b|\bnew\s+Error\s*\(|\bError\s*\()/i.test(value) &&
+            /\b(?:error|failed|cannot|must|required|deprecated|unsupported|invalid)\b/i.test(
+              literal
+            )))
+      ) {
+        add(`${kind} externally meaningful literals`, literal);
+      }
+    }
+    if (isDocumentation) {
+      for (const inlineCode of value.matchAll(/`([^`]+)`/g)) {
+        add(`${kind} documented identifiers`, inlineCode[1]);
+      }
+    }
+  }
+
+  return [...groups].map(([label, values]) => `${label}: ${values.join(', ')}`);
 }
 
 function patchHunks(patch: TextPatch) {
@@ -89,8 +155,8 @@ export function buildChangeIndex(patches: TextPatch[], metadataChanges: string) 
         header: hunk.header,
         additions,
         deletions,
-        signals: extractSignals(hunk.lines),
-        content: `FILE: ${patch.filePath}\n${hunk.lines.join('\n')}`,
+        signals: extractSignals(hunk.lines, patch.filePath),
+        evidence: extractSemanticEvidence(hunk.lines, patch.filePath),
       });
     }
   }
@@ -102,7 +168,7 @@ export function buildChangeIndex(patches: TextPatch[], metadataChanges: string) 
       additions: 0,
       deletions: 0,
       signals: unique(metadataChanges.split('\n').map((line) => `metadata:${line.trim()}`)),
-      content: `METADATA-ONLY CHANGES:\n${metadataChanges}`,
+      evidence: unique(metadataChanges.split('\n').map((line) => line.trim())),
     });
   }
   for (const [index, entry] of entries.entries()) {
@@ -114,13 +180,49 @@ export function buildChangeIndex(patches: TextPatch[], metadataChanges: string) 
 export function formatChangeIndexEntry(entry: ChangeIndexEntry) {
   return [
     `${entry.id} | ${entry.filePath} | +${entry.additions}/-${entry.deletions} | ${entry.header}`,
-    `signals: ${entry.signals.join(' ; ') || 'none; inspect this hunk if its behavior matters'}`,
-    `full-diff-chars: ${entry.content.length}`,
+    `signals: ${formatSignals(entry.signals)}`,
+    `semantic changes: ${entry.evidence.join(' ; ') || 'implementation changed within the named scope'}`,
   ].join('\n');
 }
 
+function formatSignals(signals: string[]) {
+  const groups = new Map<string, string[]>();
+  for (const signal of signals) {
+    const separator = signal.indexOf(':');
+    const kind = separator < 0 ? 'other' : signal.slice(0, separator);
+    const value = separator < 0 ? signal : signal.slice(separator + 1);
+    groups.set(kind, unique([...(groups.get(kind) || []), value]));
+  }
+  return (
+    [...groups].map(([kind, values]) => `${kind}: ${values.join(', ')}`).join(' ; ') ||
+    'no named symbol or configuration signal'
+  );
+}
+
 export function formatChangeIndex(entries: ChangeIndexEntry[]) {
-  return entries.map(formatChangeIndexEntry).join('\n\n') || 'No diff hunks are available.';
+  const files = new Map<string, ChangeIndexEntry[]>();
+  for (const entry of entries) {
+    files.set(entry.filePath, [...(files.get(entry.filePath) || []), entry]);
+  }
+  return (
+    [...files]
+      .map(([filePath, fileEntries]) => {
+        const hunks = fileEntries
+          .map(
+            ({ id, additions, deletions, header }) => `${id} +${additions}/-${deletions} ${header}`
+          )
+          .join(' | ');
+        const signals = unique(fileEntries.flatMap(({ signals }) => signals));
+        const evidence = unique(fileEntries.flatMap(({ evidence }) => evidence));
+        return [
+          `FILE: ${filePath}`,
+          `hunks: ${hunks}`,
+          `signals: ${formatSignals(signals)}`,
+          `semantic changes: ${evidence.join(' ; ') || 'implementation changed within the named scopes'}`,
+        ].join('\n');
+      })
+      .join('\n\n') || 'No diff hunks are available.'
+  );
 }
 
 export function buildContextDigest(files: Array<{ path: string; content: string }>) {
@@ -160,20 +262,5 @@ export function buildContextDigest(files: Array<{ path: string; content: string 
       })
       .filter((value) => !value.endsWith('\n'))
       .join('\n\n') || 'No unchanged project context was needed.'
-  );
-}
-
-export function parseEvidenceSelection(response: string, availableIds: string[]) {
-  const cleaned = response
-    .trim()
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/, '');
-  const parsed = JSON.parse(cleaned);
-  if (!Array.isArray(parsed.selected_ids)) {
-    throw new Error('Evidence selection did not contain selected_ids');
-  }
-  const available = new Set(availableIds);
-  return unique(parsed.selected_ids.filter((id: unknown) => typeof id === 'string')).filter((id) =>
-    available.has(id)
   );
 }

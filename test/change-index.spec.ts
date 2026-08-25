@@ -1,13 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import {
-  buildChangeIndex,
-  buildContextDigest,
-  formatChangeIndex,
-  parseEvidenceSelection,
-} from '../src/change-index.js';
+import { buildChangeIndex, buildContextDigest, formatChangeIndex } from '../src/change-index.js';
 
-describe('selective diff evidence', () => {
+describe('local semantic diff digest', () => {
   it('indexes every hunk with code and configuration signals', () => {
     const entries = buildChangeIndex(
       [
@@ -35,11 +30,13 @@ describe('selective diff evidence', () => {
       ['H0001', 'H0002', 'H0003']
     );
     const index = formatChangeIndex(entries);
-    assert.match(index, /declaration:createRelease/);
-    assert.match(index, /route:\/api\/releases/);
-    assert.match(index, /option:--comparison-base/);
-    assert.match(index, /metadata:M\s+dist\/index\.js/);
+    assert.match(index, /declaration: .*createRelease/);
+    assert.match(index, /route: .*\/api\/releases/);
+    assert.match(index, /option: .*--comparison-base/);
+    assert.match(index, /metadata: M\s+dist\/index\.js/);
     assert.doesNotMatch(index, /const endpoint/);
+    assert.match(index, /added public declarations: createRelease/);
+    assert.match(index, /added externally meaningful literals: \/api\/releases/);
   });
 
   it('creates a compact digest instead of copying complete context files', () => {
@@ -66,14 +63,22 @@ describe('selective diff evidence', () => {
     assert.doesNotMatch(digest, /node --test/);
   });
 
-  it('accepts only known selected hunk IDs', () => {
-    assert.deepEqual(
-      parseEvidenceSelection('```json\n{"selected_ids":["H0002","unknown","H0002"]}\n```', [
-        'H0001',
-        'H0002',
-      ]),
-      ['H0002']
+  it('covers every hunk without copying implementation bodies', () => {
+    const body = Array.from({ length: 200 }, (_, index) => `+  internalStep${index}();`).join('\n');
+    const entries = buildChangeIndex(
+      [
+        {
+          filePath: 'src/large.ts',
+          content: `@@ -1,1 +1,202 @@ function buildRelease()\n+export function buildRelease() {\n${body}\n+}`,
+        },
+      ],
+      ''
     );
-    assert.throws(() => parseEvidenceSelection('{}', ['H0001']), /selected_ids/);
+    const digest = formatChangeIndex(entries);
+
+    assert.match(digest, /H0001/);
+    assert.match(digest, /declaration: buildRelease/);
+    assert.ok(digest.length < body.length);
+    assert.doesNotMatch(digest, /internalStep199\(\)/);
   });
 });

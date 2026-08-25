@@ -58,19 +58,8 @@ export function selectRelevantContextFiles(paths: string[], changedPaths: string
   });
 }
 
-export function splitEvidence(evidence: string) {
-  const lines = evidence.split('\n');
-  if (lines.length < 2) {
-    const middle = Math.ceil(evidence.length / 2);
-    return [evidence.slice(0, middle), evidence.slice(middle)].filter(Boolean);
-  }
-  const middle = Math.ceil(lines.length / 2);
-  return [lines.slice(0, middle).join('\n'), lines.slice(middle).join('\n')].filter(Boolean);
-}
-
 export function outputTokenBudget(stage: string) {
   if (stage.startsWith('final-release-notes-template')) return 4096;
   if (stage.startsWith('final-release-notes')) return 2048;
-  if (stage.startsWith('evidence-selection') || stage.startsWith('capacity-analysis')) return 1024;
   return 768;
 }
