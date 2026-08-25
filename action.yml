@@ -23,10 +23,6 @@ inputs:
     description: Ollama model used to understand source-code changes
     required: false
     default: qwen2.5-coder:7b-instruct
-  analysis-concurrency:
-    description: Maximum number of independent change analyses requested concurrently
-    required: false
-    default: '4'
   ollama-host:
     description: Ollama API base URL
     required: false
@@ -85,13 +81,8 @@ runs:
       shell: bash
       env:
         OLLAMA_HOST_URL: ${{ inputs.ollama-host }}
-        OLLAMA_NUM_PARALLEL: ${{ inputs.analysis-concurrency }}
       run: |
-        echo "Runner CPUs: $(getconf _NPROCESSORS_ONLN 2>/dev/null || echo unknown)"
-        free -h 2>/dev/null || true
-        swapon --show 2>/dev/null || true
         if curl --silent --fail "$OLLAMA_HOST_URL/api/tags" >/dev/null; then
-          echo "Using an existing Ollama server. Client concurrency is $OLLAMA_NUM_PARALLEL; configure server-side parallelism on that host separately."
           exit 0
         fi
         case "$OLLAMA_HOST_URL" in
@@ -132,7 +123,6 @@ runs:
         INPUT_COMPARISON_BASE: ${{ inputs.comparison-base }}
         INPUT_COMPARISON_TARGET: ${{ inputs.comparison-target }}
         INPUT_MODEL: ${{ inputs.model }}
-        INPUT_ANALYSIS_CONCURRENCY: ${{ inputs.analysis-concurrency }}
         INPUT_OLLAMA_HOST: ${{ inputs.ollama-host }}
         INPUT_LANGUAGE: ${{ inputs.language }}
         INPUT_BILINGUAL: ${{ inputs.bilingual }}

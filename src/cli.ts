@@ -7,7 +7,6 @@ const valueOptions = new Set([
   'comparison-base',
   'comparison-target',
   'model',
-  'analysis-concurrency',
   'language',
   'ollama-host',
   'output-file',
@@ -27,8 +26,6 @@ Options:
   --language <language>     Primary release-note language
   --bilingual               Include English before the selected non-English language
   --model <model>           Ollama model name
-  --analysis-concurrency <number>
-                            Analyze independent change groups concurrently (default: 4)
   --ollama-host <url>       Ollama API base URL
   --output-file <path>      Write generated Markdown to this path
   --template-file <path>    Populate the release-note section of a Markdown template

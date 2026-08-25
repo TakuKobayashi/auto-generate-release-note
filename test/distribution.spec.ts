@@ -41,7 +41,6 @@ describe('GitHub Action distribution', () => {
       'comparison-base',
       'comparison-target',
       'model',
-      'analysis-concurrency',
       'ollama-host',
       'language',
       'bilingual',
@@ -51,7 +50,6 @@ describe('GitHub Action distribution', () => {
       'output-file',
       'template-file',
     ]);
-    assert.match(metadata, /OLLAMA_NUM_PARALLEL: \$\{\{ inputs\.analysis-concurrency \}\}/);
   });
 
   it('provides a versionless production branch comparison workflow', () => {

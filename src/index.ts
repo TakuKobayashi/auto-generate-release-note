@@ -9,7 +9,6 @@ import {
   splitEvidence,
 } from './analysis-plan.js';
 import { helpText, parseArgs } from './cli.js';
-import { mapWithConcurrency } from './concurrency.js';
 import { requestOllamaChat } from './ollama-request.js';
 import { isReleaseTag } from './release-tags.js';
 import {
@@ -67,9 +66,6 @@ const shouldPublishBilingual = bilingual && !isEnglishOnly;
 const inferenceTimeoutSeconds = Number.parseInt(
   args['inference-timeout-seconds'] || env.INPUT_INFERENCE_TIMEOUT_SECONDS || '600',
   10
-);
-const analysisConcurrency = Number(
-  args['analysis-concurrency'] || env.INPUT_ANALYSIS_CONCURRENCY || '4'
 );
 let modelContextLength;
 
@@ -262,9 +258,6 @@ if (!comparisonTarget || (!dryRun && (!tag || !token || !repository))) {
 if (!Number.isFinite(inferenceTimeoutSeconds) || inferenceTimeoutSeconds < 30) {
   throw new Error('inference-timeout-seconds must be an integer of at least 30');
 }
-if (!Number.isInteger(analysisConcurrency) || analysisConcurrency < 1) {
-  throw new Error('analysis-concurrency must be a positive integer');
-}
 
 function git(...args) {
   return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }).trim();
@@ -310,7 +303,6 @@ function logOllamaDiagnostics(stage, sourceChars) {
       `stage=${stage}`,
       `host=${ollamaHost}`,
       `model=${model}`,
-      `analysis-concurrency=${analysisConcurrency}`,
       `language=${normalizedLanguage}`,
       `bilingual=${shouldPublishBilingual}`,
       `source-chars=${sourceChars}`,
@@ -695,41 +687,42 @@ async function generateWithModel(
 ) {
   const tasks = createAnalysisTasks(patches);
   console.log(
-    `Analyzing complete diffs for ${patches.length} text files in ${tasks.length} related groups with up to ${analysisConcurrency} concurrent requests and capacity fallback only when Ollama rejects a request`
+    `Analyzing complete diffs for ${patches.length} text files in ${tasks.length} related groups with capacity fallback only when Ollama rejects a request`
   );
-  const analysisJobs = tasks.map((task, index) => ({
-    instructions: [
-      `Analyze related change group ${index + 1}/${tasks.length} in project area '${task.group}'.`,
-      `Files in this group: ${task.files.join(', ')}`,
-      `Related changed files: ${changedFiles}`,
-      `Project profile: ${projectProfile}`,
-      'Extract concise factual candidate release-note items from this evidence.',
-      'Relate it to the project and other changed files only when evidence supports the relationship.',
-      'Do not write final release-note prose. Do not omit a change merely because it is internal.',
-    ].join('\n'),
-    evidence: task.evidence,
-    stage: `analysis-${index + 1}/${tasks.length}-${task.group}`,
-  }));
-  if (metadataChanges) {
-    analysisJobs.push({
-      instructions: [
-        'Infer release-relevant meaning for changed generated, lock, binary, and serialized asset files.',
-        'Use the project profile, paths, change statuses, statistics, and commits. Do not claim to have read excluded contents.',
-        'For lockfiles, infer dependency updates only when manifests or commits support it.',
-        'For Unity scenes, prefabs, and assets, describe their likely affected project area and clearly retain uncertainty.',
-        `Project profile: ${projectProfile}`,
-        `Commits: ${commits}`,
-      ].join('\n'),
-      evidence: metadataChanges,
-      stage: 'metadata-and-assets',
-    });
+  const summaries = [];
+  for (const [index, task] of tasks.entries()) {
+    summaries.push(
+      await analyzeWithCapacityFallback(
+        [
+          `Analyze related change group ${index + 1}/${tasks.length} in project area '${task.group}'.`,
+          `Files in this group: ${task.files.join(', ')}`,
+          `Related changed files: ${changedFiles}`,
+          `Project profile: ${projectProfile}`,
+          'Extract concise factual candidate release-note items from this evidence.',
+          'Relate it to the project and other changed files only when evidence supports the relationship.',
+          'Do not write final release-note prose. Do not omit a change merely because it is internal.',
+        ].join('\n'),
+        task.evidence,
+        `analysis-${index + 1}/${tasks.length}-${task.group}`
+      )
+    );
   }
-  const summaries = await mapWithConcurrency(
-    analysisJobs,
-    analysisConcurrency,
-    ({ instructions, evidence, stage }) =>
-      analyzeWithCapacityFallback(instructions, evidence, stage)
-  );
+  if (metadataChanges) {
+    summaries.push(
+      await analyzeWithCapacityFallback(
+        [
+          'Infer release-relevant meaning for changed generated, lock, binary, and serialized asset files.',
+          'Use the project profile, paths, change statuses, statistics, and commits. Do not claim to have read excluded contents.',
+          'For lockfiles, infer dependency updates only when manifests or commits support it.',
+          'For Unity scenes, prefabs, and assets, describe their likely affected project area and clearly retain uncertainty.',
+          `Project profile: ${projectProfile}`,
+          `Commits: ${commits}`,
+        ].join('\n'),
+        metadataChanges,
+        'metadata-and-assets'
+      )
+    );
+  }
   const consolidated = await consolidateSummaries(summaries);
   const detailedAnalyses = summaries
     .map((summary, index) => `CHANGE GROUP ${index + 1}:\n${summary}`)
