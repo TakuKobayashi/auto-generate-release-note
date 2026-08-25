@@ -58,7 +58,6 @@ jobs:
         id: release-notes
         uses: ./
         with:
-          github-token: ${{ github.token }}
           tag: ${{ inputs.tag || github.ref_name }}
           language: en
 

@@ -12,7 +12,7 @@ import { helpText, parseArgs } from './cli.js';
 import { requestOllamaChat } from './ollama-request.js';
 import { isReleaseTag } from './release-tags.js';
 import {
-  assertTemplateScaffoldingPreserved,
+  assertTemplateApplicationValid,
   buildTemplateApplicationPrompt,
   buildTemplateReviewPrompt,
 } from './release-template.js';
@@ -774,11 +774,18 @@ if (templateFile) {
     buildTemplateApplicationPrompt(template, notes, releaseName),
     'release-template-application'
   );
-  notes = await runModel(
-    buildTemplateReviewPrompt(template, generatedNotes, populatedTemplate, releaseName),
-    'release-template-review'
-  );
-  assertTemplateScaffoldingPreserved(template, notes);
+  try {
+    assertTemplateApplicationValid(template, generatedNotes, populatedTemplate);
+    notes = populatedTemplate;
+    console.log('Template application passed deterministic validation; skipping model review');
+  } catch (error) {
+    console.warn(`::warning::Template application requires model review: ${formatError(error)}`);
+    notes = await runModel(
+      buildTemplateReviewPrompt(template, generatedNotes, populatedTemplate, releaseName),
+      'release-template-review'
+    );
+    assertTemplateApplicationValid(template, generatedNotes, notes);
+  }
 }
 
 if (outputFile) {

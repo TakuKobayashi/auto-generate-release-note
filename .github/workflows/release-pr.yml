@@ -47,7 +47,6 @@ jobs:
       - name: Generate release notes for review
         uses: ./
         with:
-          github-token: ${{ github.token }}
           tag: HEAD
           release-name: ${{ inputs.version }}
           language: en

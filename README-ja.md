@@ -41,9 +41,8 @@ jobs:
 
       - name: Generate release notes
         id: release-notes
-        uses: TakuKobayashi/auto-generate-release-note@v1
+        uses: TakuKobayashi/auto-generate-release-note@v2
         with:
-          github-token: ${{ github.token }}
           language: ja
 ```
 
@@ -54,9 +53,8 @@ jobs:
 ### 日本語と英語の両方を生成する
 
 ```yaml
-- uses: TakuKobayashi/auto-generate-release-note@v1
+- uses: TakuKobayashi/auto-generate-release-note@v2
   with:
-    github-token: ${{ github.token }}
     language: ja
     bilingual: 'true'
 ```
@@ -64,27 +62,25 @@ jobs:
 ### 生成結果だけを確認する
 
 ```yaml
-- uses: TakuKobayashi/auto-generate-release-note@v1
+- uses: TakuKobayashi/auto-generate-release-note@v2
   with:
-    github-token: ${{ github.token }}
     dry-run: 'true'
     output-file: release-notes-preview.md
 ```
 
 ## Inputs
 
-| 名前                        | 必須   | 既定値                      | 説明                                                              |
-| --------------------------- | ------ | --------------------------- | ----------------------------------------------------------------- |
-| `github-token`              | はい   | -                           | `contents: write` 権限を持つtoken。通常は `${{ github.token }}`。 |
-| `tag`                       | いいえ | `${{ github.ref_name }}`    | Releaseの対象タグ。                                               |
-| `model`                     | いいえ | `qwen2.5-coder:7b-instruct` | 使用するOllamaモデル。                                            |
-| `ollama-host`               | いいえ | `http://127.0.0.1:11434`    | Ollama APIのベースURL。                                           |
-| `language`                  | いいえ | `en`                        | 出力言語。日本語は `ja` または `jp`。                             |
-| `bilingual`                 | いいえ | `false`                     | 英語と指定言語の両方を生成。                                      |
-| `inference-timeout-seconds` | いいえ | `600`                       | Ollamaが応答を開始した後のストリーム無通信タイムアウト秒数。      |
-| `fail-on-llm-error`         | いいえ | `false`                     | `true` ならフォールバックせずActionを失敗させる。                 |
-| `dry-run`                   | いいえ | `false`                     | Releaseを変更せず生成結果だけを出力。                             |
-| `output-file`               | いいえ | 空                          | 生成したMarkdownの保存先。                                        |
+| 名前                        | 必須   | 既定値                      | 説明                                                         |
+| --------------------------- | ------ | --------------------------- | ------------------------------------------------------------ |
+| `tag`                       | いいえ | `${{ github.ref_name }}`    | Releaseの対象タグ。                                          |
+| `model`                     | いいえ | `qwen2.5-coder:7b-instruct` | 使用するOllamaモデル。                                       |
+| `ollama-host`               | いいえ | `http://127.0.0.1:11434`    | Ollama APIのベースURL。                                      |
+| `language`                  | いいえ | `en`                        | 出力言語。日本語は `ja` または `jp`。                        |
+| `bilingual`                 | いいえ | `false`                     | 英語と指定言語の両方を生成。                                 |
+| `inference-timeout-seconds` | いいえ | `600`                       | Ollamaが応答を開始した後のストリーム無通信タイムアウト秒数。 |
+| `fail-on-llm-error`         | いいえ | `false`                     | `true` ならフォールバックせずActionを失敗させる。            |
+| `dry-run`                   | いいえ | `false`                     | Releaseを変更せず生成結果だけを出力。                        |
+| `output-file`               | いいえ | 空                          | 生成したMarkdownの保存先。                                   |
 
 ## Outputs
 
@@ -138,7 +134,7 @@ npm run verify
 1. このリポジトリをGitHub上でPublicにします。
 2. 変更をmainブランチへpushします。
 3. `v1`、`v1.0.0` のようなタグを作成してpushします。
-4. Releaseワークフローがフォーマット、型、ビルド、spec、配布ファイルを検証します。その後、このAction自身を実行してOllamaでリリースノートを生成し、生成されたMarkdownを本文にしたGitHub Releaseを作成または更新します。タグをpushした時点で `TakuKobayashi/auto-generate-release-note@v1` のように利用できます。
+4. Releaseワークフローがフォーマット、型、ビルド、spec、配布ファイルを検証します。その後、このAction自身を実行してOllamaでリリースノートを生成し、生成されたMarkdownを本文にしたGitHub Releaseを作成または更新します。タグをpushした時点で `TakuKobayashi/auto-generate-release-note@v2` のように利用できます。
 5. Marketplaceへ初めて掲載するときだけ、作成されたReleaseをGitHub上で編集し、**Publish this Action to the GitHub Marketplace** を選択します。
 6. カテゴリ（例: Utilities）を選んで更新します。初回はMarketplace Developer Agreementへの同意と2要素認証が必要です。
 

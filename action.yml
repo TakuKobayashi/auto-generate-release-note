@@ -3,9 +3,6 @@ description: Generate and publish GitHub release notes from Git history with a l
 author: TakuKobayashi
 
 inputs:
-  github-token:
-    description: GitHub token with contents write permission
-    required: true
   tag:
     description: Release tag. Defaults to the tag that triggered the workflow
     required: false
@@ -106,7 +103,7 @@ runs:
       id: release
       shell: bash
       env:
-        INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
+        INPUT_GITHUB_TOKEN: ${{ github.token }}
         INPUT_TAG: ${{ inputs.tag }}
         INPUT_RELEASE_NAME: ${{ inputs.release-name }}
         INPUT_MODEL: ${{ inputs.model }}

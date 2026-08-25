@@ -22,6 +22,34 @@ describe('GitHub Action distribution', () => {
     assert.match(metadata, /INPUT_RELEASE_NAME: \$\{\{ inputs\.release-name \}\}/);
   });
 
+  it('uses the workflow token internally instead of exposing a redundant input', () => {
+    const metadata = readFileSync('action.yml', 'utf8');
+    const inputSection = metadata.match(/inputs:\n([\s\S]*?)\noutputs:/)?.[1] || '';
+    assert.doesNotMatch(inputSection, /^  github-token:/m);
+    assert.match(metadata, /INPUT_GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
+  });
+
+  it('exposes only the reviewed v2 inputs', () => {
+    const metadata = readFileSync('action.yml', 'utf8');
+    const inputSection = metadata.match(/inputs:\n([\s\S]*?)\noutputs:/)?.[1] || '';
+    const declaredInputs = [...inputSection.matchAll(/^  ([a-z][a-z0-9-]+):$/gm)].map(
+      ([, name]) => name
+    );
+    assert.deepEqual(declaredInputs, [
+      'tag',
+      'release-name',
+      'model',
+      'ollama-host',
+      'language',
+      'bilingual',
+      'inference-timeout-seconds',
+      'fail-on-llm-error',
+      'dry-run',
+      'output-file',
+      'template-file',
+    ]);
+  });
+
   it('runs the bundled CLI without TypeScript tooling', () => {
     const result = spawnSync(process.execPath, ['dist/index.js', '--help'], {
       encoding: 'utf8',
@@ -34,7 +62,6 @@ describe('GitHub Action distribution', () => {
   it('uses this action to generate and publish repository releases', () => {
     const workflow = readFileSync('.github/workflows/release.yml', 'utf8');
     assert.match(workflow, /uses: \.\//);
-    assert.match(workflow, /github-token: \$\{\{ github\.token \}\}/);
     assert.match(workflow, /tag: \$\{\{ inputs\.tag \|\| github\.ref_name \}\}/);
     assert.doesNotMatch(workflow, /gh release create/);
   });

@@ -41,9 +41,8 @@ jobs:
 
       - name: Generate release notes
         id: release-notes
-        uses: TakuKobayashi/auto-generate-release-note@v1
+        uses: TakuKobayashi/auto-generate-release-note@v2
         with:
-          github-token: ${{ github.token }}
           language: en
 ```
 
@@ -54,9 +53,8 @@ On its first run, the action installs Ollama and the default model on a GitHub-h
 ### Generate both Japanese and English
 
 ```yaml
-- uses: TakuKobayashi/auto-generate-release-note@v1
+- uses: TakuKobayashi/auto-generate-release-note@v2
   with:
-    github-token: ${{ github.token }}
     language: ja
     bilingual: 'true'
 ```
@@ -64,9 +62,8 @@ On its first run, the action installs Ollama and the default model on a GitHub-h
 ### Preview without publishing a release
 
 ```yaml
-- uses: TakuKobayashi/auto-generate-release-note@v1
+- uses: TakuKobayashi/auto-generate-release-note@v2
   with:
-    github-token: ${{ github.token }}
     dry-run: 'true'
     output-file: release-notes-preview.md
 ```
@@ -82,27 +79,26 @@ The included [release-pr workflow](.github/workflows/release-pr.yml) supports a 
 
 `tag: HEAD` selects the Git revision to analyze. `release-name` supplies the future version shown to the model even though that tag does not exist yet. The workflow fails when the requested tag or release branch already exists and never force-pushes either one.
 
-When copying this workflow into a repository that consumes the published action, replace `uses: ./` with `uses: TakuKobayashi/auto-generate-release-note@v1`.
+When copying this workflow into a repository that consumes the published action, replace `uses: ./` with `uses: TakuKobayashi/auto-generate-release-note@v2`.
 The repository setting **Allow GitHub Actions to create and approve pull requests** must permit pull-request creation by `github.token`.
 
-The workflow uses the sample [release pull-request template](.github/PULL_REQUEST_TEMPLATE/release.md). With `template-file`, the model reads the complete Markdown template, identifies the intended release-note section from its headings and instructions, inserts the generated notes there, and preserves unrelated sections such as approval checklists. A fixed marker is not required, so an existing repository-specific pull-request template can be used directly.
+The workflow uses the sample [release pull-request template](.github/PULL_REQUEST_TEMPLATE/release.md). With `template-file`, the model reads the complete Markdown template, identifies the intended release-note section from its headings and instructions, inserts the generated notes there, and preserves unrelated sections such as approval checklists. A fixed marker is not required, so an existing repository-specific pull-request template can be used directly. The result is checked deterministically for complete notes, preserved template structure, and removed placeholder text. A second model review runs only when that validation fails.
 
 ## Inputs
 
-| Name                        | Required | Default                     | Description                                                          |
-| --------------------------- | -------- | --------------------------- | -------------------------------------------------------------------- |
-| `github-token`              | Yes      | -                           | GitHub token with `contents: write`; normally `${{ github.token }}`. |
-| `tag`                       | No       | `${{ github.ref_name }}`    | Tag for the GitHub Release.                                          |
-| `release-name`              | No       | Value of `tag`              | Display name used in generated notes and the GitHub Release.         |
-| `model`                     | No       | `qwen2.5-coder:7b-instruct` | Ollama model used for generation.                                    |
-| `ollama-host`               | No       | `http://127.0.0.1:11434`    | Base URL of the Ollama API.                                          |
-| `language`                  | No       | `en`                        | Output language. Both `ja` and `jp` select Japanese.                 |
-| `bilingual`                 | No       | `false`                     | Generates English and the selected language.                         |
-| `inference-timeout-seconds` | No       | `600`                       | Inactivity timeout after Ollama starts streaming its response.       |
-| `fail-on-llm-error`         | No       | `false`                     | Fails the action instead of generating fallback notes.               |
-| `dry-run`                   | No       | `false`                     | Generates notes without creating or updating a release.              |
-| `output-file`               | No       | Empty                       | File path where generated Markdown is written.                       |
-| `template-file`             | No       | Empty                       | Markdown template populated with the generated release notes.        |
+| Name                        | Required | Default                     | Description                                                    |
+| --------------------------- | -------- | --------------------------- | -------------------------------------------------------------- |
+| `tag`                       | No       | `${{ github.ref_name }}`    | Tag for the GitHub Release.                                    |
+| `release-name`              | No       | Value of `tag`              | Display name used in generated notes and the GitHub Release.   |
+| `model`                     | No       | `qwen2.5-coder:7b-instruct` | Ollama model used for generation.                              |
+| `ollama-host`               | No       | `http://127.0.0.1:11434`    | Base URL of the Ollama API.                                    |
+| `language`                  | No       | `en`                        | Output language. Both `ja` and `jp` select Japanese.           |
+| `bilingual`                 | No       | `false`                     | Generates English and the selected language.                   |
+| `inference-timeout-seconds` | No       | `600`                       | Inactivity timeout after Ollama starts streaming its response. |
+| `fail-on-llm-error`         | No       | `false`                     | Fails the action instead of generating fallback notes.         |
+| `dry-run`                   | No       | `false`                     | Generates notes without creating or updating a release.        |
+| `output-file`               | No       | Empty                       | File path where generated Markdown is written.                 |
+| `template-file`             | No       | Empty                       | Markdown template populated with the generated release notes.  |
 
 ## Outputs
 
@@ -158,7 +154,7 @@ npm run verify
 1. Make this repository public on GitHub.
 2. Push the changes to the `main` branch.
 3. Create and push a tag such as `v1` or `v1.0.0`.
-4. The Release workflow validates formatting, types, the build, specs, and the committed distribution. It then runs this action itself, generates release notes with Ollama, and creates or updates the GitHub Release with the generated Markdown. Once the tag is pushed, the action can be used as `TakuKobayashi/auto-generate-release-note@v1`.
+4. The Release workflow validates formatting, types, the build, specs, and the committed distribution. It then runs this action itself, generates release notes with Ollama, and creates or updates the GitHub Release with the generated Markdown. Once the tag is pushed, the action can be used as `TakuKobayashi/auto-generate-release-note@v2`.
 5. For the first Marketplace publication only, edit the generated release on GitHub and select **Publish this Action to the GitHub Marketplace**.
 6. Select a category such as Utilities and update the release. The first publication requires acceptance of the Marketplace Developer Agreement and two-factor authentication.
 
