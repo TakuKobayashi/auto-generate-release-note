@@ -18,10 +18,13 @@ describe('GitHub Action distribution', () => {
 
   it('verifies model pulls and refuses fallback notes for repository releases', () => {
     const metadata = readFileSync('action.yml', 'utf8');
+    const pullScript = readFileSync('.github/scripts/pull-ollama-model.mjs', 'utf8');
     const workflow = readFileSync('.github/workflows/release.yml', 'utf8');
-    assert.match(metadata, /stream: false/);
-    assert.match(metadata, /result\.status !== "success"/);
-    assert.match(metadata, /\/api\/show/);
+    assert.match(metadata, /\.github\/scripts\/pull-ollama-model\.mjs/);
+    assert.doesNotMatch(metadata, /node -e/);
+    assert.match(pullScript, /stream: false/);
+    assert.match(pullScript, /pullResult\.status !== 'success'/);
+    assert.match(pullScript, /\/api\/show/);
     assert.match(workflow, /fail-on-llm-error: 'true'/);
   });
 
