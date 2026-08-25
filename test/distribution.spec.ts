@@ -16,6 +16,12 @@ describe('GitHub Action distribution', () => {
     assert.doesNotMatch(metadata, /num-ctx/);
   });
 
+  it('supports a release display name separate from the comparison ref', () => {
+    const metadata = readFileSync('action.yml', 'utf8');
+    assert.match(metadata, /release-name:/);
+    assert.match(metadata, /INPUT_RELEASE_NAME: \$\{\{ inputs\.release-name \}\}/);
+  });
+
   it('runs the bundled CLI without TypeScript tooling', () => {
     const result = spawnSync(process.execPath, ['dist/index.js', '--help'], {
       encoding: 'utf8',
@@ -31,5 +37,17 @@ describe('GitHub Action distribution', () => {
     assert.match(workflow, /github-token: \$\{\{ github\.token \}\}/);
     assert.match(workflow, /tag: \$\{\{ inputs\.tag \|\| github\.ref_name \}\}/);
     assert.doesNotMatch(workflow, /gh release create/);
+  });
+
+  it('provides a merge-approved release PR workflow', () => {
+    const workflow = readFileSync('.github/workflows/release-pr.yml', 'utf8');
+    assert.match(workflow, /pull_request:\s*\n\s*types: \[closed\]/);
+    assert.match(workflow, /github\.event\.pull_request\.merged == true/);
+    assert.match(workflow, /dry-run: 'true'/);
+    assert.match(workflow, /release-name: \$\{\{ inputs\.version \}\}/);
+    assert.match(workflow, /gh pr create/);
+    assert.match(workflow, /APPROVED_NOTES: \$\{\{ github\.event\.pull_request\.body \}\}/);
+    assert.match(workflow, /gh release create/);
+    assert.doesNotMatch(workflow, /force/);
   });
 });

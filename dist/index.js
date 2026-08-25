@@ -83,6 +83,7 @@ function outputTokenBudget(stage) {
 var booleanOptions = /* @__PURE__ */ new Set(["dry-run", "fail-on-llm-error", "bilingual"]);
 var valueOptions = /* @__PURE__ */ new Set([
   "tag",
+  "release-name",
   "model",
   "language",
   "ollama-host",
@@ -95,6 +96,7 @@ var helpText = `Usage: node dist/index.js [options]
 Options:
   --dry-run                 Generate notes without changing a GitHub Release
   --tag <tag>               Target tag (defaults to HEAD in dry-run mode)
+  --release-name <name>     Display name for notes (defaults to --tag)
   --language <language>     Primary release-note language
   --bilingual               Include English before the selected non-English language
   --model <model>           Ollama model name
@@ -230,6 +232,7 @@ var failOnLlmError = args["fail-on-llm-error"] ?? env.INPUT_FAIL_ON_LLM_ERROR ==
 var bilingual = args.bilingual ?? env.INPUT_BILINGUAL === "true";
 var token = args["github-token"] || env.INPUT_GITHUB_TOKEN;
 var tag = args.tag || env.INPUT_TAG || (dryRun ? "HEAD" : "");
+var releaseName = args["release-name"] || env.INPUT_RELEASE_NAME || tag;
 var repository = env.GITHUB_REPOSITORY;
 var model = args.model || env.INPUT_MODEL || "qwen2.5-coder:7b-instruct";
 var ollamaHost = (args["ollama-host"] || env.INPUT_OLLAMA_HOST || "http://127.0.0.1:11434").replace(/\/$/, "");
@@ -812,7 +815,7 @@ ${compactEvidence}`,
   }
   return runModel(
     [
-      `Review and correct this draft for the single target release '${tag}'.`,
+      `Review and correct this draft for the single target release '${releaseName}'.`,
       `The previous tag '${previousTag || "none"}' is only the comparison base; never create a release section for it.`,
       "Keep only claims directly supported by the supplied evidence.",
       "Compare the draft against every detailed group analysis and restore every omitted, supported distinct change.",
@@ -888,7 +891,7 @@ ${consolidated}
 
 DETAILED GROUP ANALYSES (use these to prevent omissions):
 ${detailedAnalyses}`;
-  const languageInstruction = shouldPublishBilingual ? `Write comprehensive bilingual release notes for the single target release ${tag}, based on changes since ${previousTag2 || "the repository began"}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. First write a complete English version under the heading '# English'. Then write an equivalent ${targetLanguage} translation under the heading '# ${targetLanguage}', separated from English by a horizontal rule. Keep both versions semantically equivalent. Do not create a separate section for ${previousTag2 || "a previous release"}. Include breaking changes or migration steps only when explicitly supported by evidence.` : `Write comprehensive release notes in ${targetLanguage} only for the single target release ${tag}, based on changes since ${previousTag2 || "the repository began"}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. Do not duplicate or translate the notes into another language. Do not create a separate section for ${previousTag2 || "a previous release"}. Include breaking changes or migration steps only when explicitly supported by evidence.`;
+  const languageInstruction = shouldPublishBilingual ? `Write comprehensive bilingual release notes for the single target release ${releaseName}, based on changes since ${previousTag2 || "the repository began"}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. First write a complete English version under the heading '# English'. Then write an equivalent ${targetLanguage} translation under the heading '# ${targetLanguage}', separated from English by a horizontal rule. Keep both versions semantically equivalent. Do not create a separate section for ${previousTag2 || "a previous release"}. Include breaking changes or migration steps only when explicitly supported by evidence.` : `Write comprehensive release notes in ${targetLanguage} only for the single target release ${releaseName}, based on changes since ${previousTag2 || "the repository began"}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. Do not duplicate or translate the notes into another language. Do not create a separate section for ${previousTag2 || "a previous release"}. Include breaking changes or migration steps only when explicitly supported by evidence.`;
   return writeFinalReleaseNotes(languageInstruction, sourceMaterial);
 }
 if (!dryRun) git("fetch", "--force", "--tags", "--prune", "origin");
@@ -958,7 +961,7 @@ try {
 }
 var payload = {
   tag_name: tag,
-  name: tag,
+  name: releaseName,
   body: notes,
   draft: false,
   prerelease: tag.includes("-")
@@ -973,7 +976,7 @@ var release = existingRelease ? await github(`/repos/${repository}/releases/${ex
 if (env.GITHUB_STEP_SUMMARY) {
   appendFileSync(
     env.GITHUB_STEP_SUMMARY,
-    `## Release notes (${tag})
+    `## Release notes (${releaseName})
 
 ${notes}
 

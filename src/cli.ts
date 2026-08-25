@@ -3,6 +3,7 @@ export type CliOptions = Record<string, any>;
 const booleanOptions = new Set(['dry-run', 'fail-on-llm-error', 'bilingual']);
 const valueOptions = new Set([
   'tag',
+  'release-name',
   'model',
   'language',
   'ollama-host',
@@ -16,6 +17,7 @@ export const helpText = `Usage: node dist/index.js [options]
 Options:
   --dry-run                 Generate notes without changing a GitHub Release
   --tag <tag>               Target tag (defaults to HEAD in dry-run mode)
+  --release-name <name>     Display name for notes (defaults to --tag)
   --language <language>     Primary release-note language
   --bilingual               Include English before the selected non-English language
   --model <model>           Ollama model name

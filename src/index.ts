@@ -23,6 +23,7 @@ const failOnLlmError = args['fail-on-llm-error'] ?? env.INPUT_FAIL_ON_LLM_ERROR 
 const bilingual = args.bilingual ?? env.INPUT_BILINGUAL === 'true';
 const token = args['github-token'] || env.INPUT_GITHUB_TOKEN;
 const tag = args.tag || env.INPUT_TAG || (dryRun ? 'HEAD' : '');
+const releaseName = args['release-name'] || env.INPUT_RELEASE_NAME || tag;
 const repository = env.GITHUB_REPOSITORY;
 const model = args.model || env.INPUT_MODEL || 'qwen2.5-coder:7b-instruct';
 const ollamaHost = (
@@ -630,7 +631,7 @@ async function writeFinalReleaseNotes(languageInstruction, sourceMaterial) {
   }
   return runModel(
     [
-      `Review and correct this draft for the single target release '${tag}'.`,
+      `Review and correct this draft for the single target release '${releaseName}'.`,
       `The previous tag '${previousTag || 'none'}' is only the comparison base; never create a release section for it.`,
       'Keep only claims directly supported by the supplied evidence.',
       'Compare the draft against every detailed group analysis and restore every omitted, supported distinct change.',
@@ -701,8 +702,8 @@ async function generateWithModel(
     .join('\n\n');
   const sourceMaterial = `PROJECT PROFILE:\n${projectProfile}\n\nCOMMITS:\n${commits}\n\nCHANGED FILES:\n${changedFiles}\n\nCONTENT-EXCLUDED FILES:\n${excludedFiles || 'None'}\n\nCONSOLIDATED ANALYSIS:\n${consolidated}\n\nDETAILED GROUP ANALYSES (use these to prevent omissions):\n${detailedAnalyses}`;
   const languageInstruction = shouldPublishBilingual
-    ? `Write comprehensive bilingual release notes for the single target release ${tag}, based on changes since ${previousTag || 'the repository began'}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. First write a complete English version under the heading '# English'. Then write an equivalent ${targetLanguage} translation under the heading '# ${targetLanguage}', separated from English by a horizontal rule. Keep both versions semantically equivalent. Do not create a separate section for ${previousTag || 'a previous release'}. Include breaking changes or migration steps only when explicitly supported by evidence.`
-    : `Write comprehensive release notes in ${targetLanguage} only for the single target release ${tag}, based on changes since ${previousTag || 'the repository began'}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. Do not duplicate or translate the notes into another language. Do not create a separate section for ${previousTag || 'a previous release'}. Include breaking changes or migration steps only when explicitly supported by evidence.`;
+    ? `Write comprehensive bilingual release notes for the single target release ${releaseName}, based on changes since ${previousTag || 'the repository began'}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. First write a complete English version under the heading '# English'. Then write an equivalent ${targetLanguage} translation under the heading '# ${targetLanguage}', separated from English by a horizontal rule. Keep both versions semantically equivalent. Do not create a separate section for ${previousTag || 'a previous release'}. Include breaking changes or migration steps only when explicitly supported by evidence.`
+    : `Write comprehensive release notes in ${targetLanguage} only for the single target release ${releaseName}, based on changes since ${previousTag || 'the repository began'}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. Do not duplicate or translate the notes into another language. Do not create a separate section for ${previousTag || 'a previous release'}. Include breaking changes or migration steps only when explicitly supported by evidence.`;
   return writeFinalReleaseNotes(languageInstruction, sourceMaterial);
 }
 
@@ -784,7 +785,7 @@ try {
 
 const payload = {
   tag_name: tag,
-  name: tag,
+  name: releaseName,
   body: notes,
   draft: false,
   prerelease: tag.includes('-'),
@@ -802,7 +803,7 @@ const release = existingRelease
 if (env.GITHUB_STEP_SUMMARY) {
   appendFileSync(
     env.GITHUB_STEP_SUMMARY,
-    `## Release notes (${tag})\n\n${notes}\n\n[Open release](${release.html_url})\n`
+    `## Release notes (${releaseName})\n\n${notes}\n\n[Open release](${release.html_url})\n`
   );
 }
 if (env.GITHUB_OUTPUT) {

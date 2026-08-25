@@ -10,6 +10,10 @@ inputs:
     description: Release tag. Defaults to the tag that triggered the workflow
     required: false
     default: ${{ github.ref_name }}
+  release-name:
+    description: Display name used in generated notes and the GitHub Release; defaults to tag
+    required: false
+    default: ''
   model:
     description: Ollama model used to understand source-code changes
     required: false
@@ -100,6 +104,7 @@ runs:
       env:
         INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
         INPUT_TAG: ${{ inputs.tag }}
+        INPUT_RELEASE_NAME: ${{ inputs.release-name }}
         INPUT_MODEL: ${{ inputs.model }}
         INPUT_OLLAMA_HOST: ${{ inputs.ollama-host }}
         INPUT_LANGUAGE: ${{ inputs.language }}

@@ -5,9 +5,18 @@ import { helpText, parseArgs } from '../src/cli.js';
 describe('parseArgs', () => {
   it('parses value and boolean options', () => {
     assert.deepEqual(
-      parseArgs(['--tag', 'v1.2.3', '--language=ja', '--dry-run', '--bilingual=false']),
+      parseArgs([
+        '--tag',
+        'HEAD',
+        '--release-name',
+        'v1.2.3',
+        '--language=ja',
+        '--dry-run',
+        '--bilingual=false',
+      ]),
       {
-        tag: 'v1.2.3',
+        tag: 'HEAD',
+        'release-name': 'v1.2.3',
         language: 'ja',
         'dry-run': true,
         bilingual: false,

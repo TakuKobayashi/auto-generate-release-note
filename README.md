@@ -71,12 +71,27 @@ On its first run, the action installs Ollama and the default model on a GitHub-h
     output-file: release-notes-preview.md
 ```
 
+### Use a pull request as release approval
+
+The included [release-pr workflow](.github/workflows/release-pr.yml) supports a review-first release flow:
+
+1. Run **Release through pull request** manually and enter the next version.
+2. The workflow compares the default branch at `HEAD` with the previous release tag and opens `release/<version>` with the generated notes in the pull request body.
+3. Review and, if necessary, edit the pull request body. Merging it is the release approval.
+4. After the merge, the workflow tags the exact merge commit and creates the GitHub Release from that approved pull request body. It does not call the model again.
+
+`tag: HEAD` selects the Git revision to analyze. `release-name` supplies the future version shown to the model even though that tag does not exist yet. The workflow fails when the requested tag or release branch already exists and never force-pushes either one.
+
+When copying this workflow into a repository that consumes the published action, replace `uses: ./` with `uses: TakuKobayashi/auto-generate-release-note@v1`.
+The repository setting **Allow GitHub Actions to create and approve pull requests** must permit pull-request creation by `github.token`.
+
 ## Inputs
 
 | Name                        | Required | Default                     | Description                                                          |
 | --------------------------- | -------- | --------------------------- | -------------------------------------------------------------------- |
 | `github-token`              | Yes      | -                           | GitHub token with `contents: write`; normally `${{ github.token }}`. |
 | `tag`                       | No       | `${{ github.ref_name }}`    | Tag for the GitHub Release.                                          |
+| `release-name`              | No       | Value of `tag`              | Display name used in generated notes and the GitHub Release.         |
 | `model`                     | No       | `qwen2.5-coder:7b-instruct` | Ollama model used for generation.                                    |
 | `ollama-host`               | No       | `http://127.0.0.1:11434`    | Base URL of the Ollama API.                                          |
 | `language`                  | No       | `en`                        | Output language. Both `ja` and `jp` select Japanese.                 |
@@ -120,6 +135,7 @@ node path/to/dist/index.js `
 ```
 
 Add `--tag v1.2.3` to preview an existing tag. Run `node dist/index.js --help` to see all options.
+For a future release, use `--tag HEAD --release-name v1.2.3` so Git comparison and the displayed release version remain separate.
 
 ## Development
 

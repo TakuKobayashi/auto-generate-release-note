@@ -1,0 +1,121 @@
+name: Release through pull request
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (for example, v1.2.3)
+        required: true
+        type: string
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare-release-pr:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Validate release request
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: $VERSION" >&2
+            exit 1
+          fi
+          if git rev-parse --verify --quiet "refs/tags/$VERSION"; then
+            echo "Tag already exists: $VERSION" >&2
+            exit 1
+          fi
+          branch="release/$VERSION"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "Release branch already exists: $branch" >&2
+            exit 1
+          fi
+
+      - name: Generate release notes for review
+        uses: ./
+        with:
+          github-token: ${{ github.token }}
+          tag: HEAD
+          release-name: ${{ inputs.version }}
+          language: en
+          dry-run: 'true'
+          fail-on-llm-error: 'true'
+          output-file: ${{ runner.temp }}/release-notes.md
+
+      - name: Create release pull request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          NOTES_FILE: ${{ runner.temp }}/release-notes.md
+        run: |
+          branch="release/$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit --allow-empty -m "Prepare release $VERSION"
+          git push origin "$branch"
+          gh pr create \
+            --base "$DEFAULT_BRANCH" \
+            --head "$branch" \
+            --title "Release $VERSION" \
+            --body-file "$NOTES_FILE"
+
+  publish-approved-release:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'release/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout approved merge commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - name: Publish approved release notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          APPROVED_NOTES: ${{ github.event.pull_request.body }}
+          NOTES_FILE: ${{ runner.temp }}/approved-release-notes.md
+        run: |
+          version="${HEAD_REF#release/}"
+          if [[ ! "$version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release branch: $HEAD_REF" >&2
+            exit 1
+          fi
+          if [[ -z "$APPROVED_NOTES" ]]; then
+            echo "The approved pull request body is empty" >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null 2>&1; then
+            echo "Tag already exists: $version" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$version" "$MERGE_SHA" -m "$version"
+          git push origin "refs/tags/$version"
+          printf '%s\n' "$APPROVED_NOTES" > "$NOTES_FILE"
+          gh release create "$version" \
+            --verify-tag \
+            --title "$version" \
+            --notes-file "$NOTES_FILE"
