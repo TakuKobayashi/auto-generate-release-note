@@ -85,6 +85,8 @@ var booleanOptions = /* @__PURE__ */ new Set(["dry-run", "fail-on-llm-error", "b
 var valueOptions = /* @__PURE__ */ new Set([
   "tag",
   "release-name",
+  "comparison-base",
+  "comparison-target",
   "model",
   "analysis-concurrency",
   "language",
@@ -100,6 +102,8 @@ Options:
   --dry-run                 Generate notes without changing a GitHub Release
   --tag <tag>               Target tag (defaults to HEAD in dry-run mode)
   --release-name <name>     Display name for notes (defaults to --tag)
+  --comparison-base <ref>   Explicit branch, tag, or commit used as the diff base
+  --comparison-target <ref> Branch, tag, or commit compared with the explicit base
   --language <language>     Primary release-note language
   --bilingual               Include English before the selected non-English language
   --model <model>           Ollama model name
@@ -340,7 +344,11 @@ var failOnLlmError = args["fail-on-llm-error"] ?? env.INPUT_FAIL_ON_LLM_ERROR ==
 var bilingual = args.bilingual ?? env.INPUT_BILINGUAL === "true";
 var token = args["github-token"] || env.INPUT_GITHUB_TOKEN;
 var tag = args.tag || env.INPUT_TAG || (dryRun ? "HEAD" : "");
-var releaseName = args["release-name"] || env.INPUT_RELEASE_NAME || tag;
+var explicitComparisonBase = args["comparison-base"] || env.INPUT_COMPARISON_BASE || "";
+var explicitComparisonTarget = args["comparison-target"] || env.INPUT_COMPARISON_TARGET || "";
+var usesExplicitComparison = Boolean(explicitComparisonBase || explicitComparisonTarget);
+var comparisonTarget = explicitComparisonTarget || tag;
+var releaseName = args["release-name"] || env.INPUT_RELEASE_NAME || explicitComparisonTarget || tag;
 var repository = env.GITHUB_REPOSITORY;
 var model = args.model || env.INPUT_MODEL || "qwen2.5-coder:7b-instruct";
 var ollamaHost = (args["ollama-host"] || env.INPUT_OLLAMA_HOST || "http://127.0.0.1:11434").replace(/\/$/, "");
@@ -547,9 +555,12 @@ var excludedContentDirectories = /* @__PURE__ */ new Set([
   "temp",
   "usersettings"
 ]);
-if (!tag || !dryRun && (!token || !repository)) {
+if (Boolean(explicitComparisonBase) !== Boolean(explicitComparisonTarget)) {
+  throw new Error("comparison-base and comparison-target must be specified together");
+}
+if (!comparisonTarget || !dryRun && (!tag || !token || !repository)) {
   throw new Error(
-    "tag is required; github-token and GITHUB_REPOSITORY are also required unless dry-run is true"
+    "a comparison target is required; tag, github-token, and GITHUB_REPOSITORY are also required unless dry-run is true"
   );
 }
 if (!Number.isFinite(inferenceTimeoutSeconds) || inferenceTimeoutSeconds < 30) {
@@ -560,6 +571,16 @@ if (!Number.isInteger(analysisConcurrency) || analysisConcurrency < 1) {
 }
 function git(...args2) {
   return execFileSync("git", args2, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 }).trim();
+}
+function resolveGitRef(ref) {
+  for (const candidate of [ref, `origin/${ref}`]) {
+    try {
+      git("rev-parse", "--verify", `${candidate}^{commit}`);
+      return candidate;
+    } catch {
+    }
+  }
+  throw new Error(`Git comparison ref does not resolve to a commit: ${ref}`);
 }
 function formatError(error) {
   const seen = /* @__PURE__ */ new Set();
@@ -703,8 +724,8 @@ async function verifyOllama() {
     `Using ${modelContextLength || "Ollama's server-default"} context tokens reported for model '${model}'`
   );
 }
-function fallbackNotes(previousTag2, commits2, changedFiles2) {
-  const rangeLabel = previousTag2 ? `${previousTag2}...${tag}` : tag;
+function fallbackNotes(comparisonBase, commits2, changedFiles2) {
+  const rangeLabel = comparisonBase ? `${comparisonBase}...${comparisonTarget}` : comparisonTarget;
   const commitLines = commits2.split("\n").filter(Boolean).map((line) => `- ${line}`).join("\n");
   const english = [
     "## Changes",
@@ -883,8 +904,10 @@ ${summary}`).join("\n\n");
 }
 async function buildProjectProfile(repositoryFiles2) {
   const contextFiles = selectProjectContextFiles(repositoryFiles2);
-  const context = contextFiles.map((filePath) => `PROJECT CONTEXT FILE: ${filePath}
-${git("show", `${tag}:${filePath}`)}`).join("\n\n");
+  const context = contextFiles.map(
+    (filePath) => `PROJECT CONTEXT FILE: ${filePath}
+${git("show", `${resolvedComparisonTarget}:${filePath}`)}`
+  ).join("\n\n");
   return analyzeWithCapacityFallback(
     [
       "Create a compact project profile for later release-change analysis.",
@@ -932,7 +955,7 @@ ${compactEvidence}`,
   return runModel(
     [
       `Review and correct this draft for the single target release '${releaseName}'.`,
-      `The previous tag '${previousTag || "none"}' is only the comparison base; never create a release section for it.`,
+      `The ref '${comparisonBaseLabel || "none"}' is only the comparison base; never create a release section for it.`,
       "Keep only claims directly supported by the supplied evidence.",
       "Compare the draft against every detailed group analysis and restore every omitted, supported distinct change.",
       "A one-item draft is invalid when the evidence contains multiple distinct release-relevant changes.",
@@ -948,7 +971,7 @@ ${compactEvidence}`,
     "final-release-notes-review"
   );
 }
-async function generateWithModel(previousTag2, commits2, changedFiles2, excludedFiles2, patches2, metadataChanges2, projectProfile) {
+async function generateWithModel(comparisonBase, commits2, changedFiles2, excludedFiles2, patches2, metadataChanges2, projectProfile) {
   const tasks = createAnalysisTasks(patches2);
   console.log(
     `Analyzing complete diffs for ${patches2.length} text files in ${tasks.length} related groups with up to ${analysisConcurrency} concurrent requests and capacity fallback only when Ollama rejects a request`
@@ -1005,36 +1028,46 @@ ${consolidated}
 
 DETAILED GROUP ANALYSES (use these to prevent omissions):
 ${detailedAnalyses}`;
-  const languageInstruction = shouldPublishBilingual ? `Write comprehensive bilingual release notes for the single target release ${releaseName}, based on changes since ${previousTag2 || "the repository began"}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. First write a complete English version under the heading '# English'. Then write an equivalent ${targetLanguage} translation under the heading '# ${targetLanguage}', separated from English by a horizontal rule. Keep both versions semantically equivalent. Do not create a separate section for ${previousTag2 || "a previous release"}. Include breaking changes or migration steps only when explicitly supported by evidence.` : `Write comprehensive release notes in ${targetLanguage} only for the single target release ${releaseName}, based on changes since ${previousTag2 || "the repository began"}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. Do not duplicate or translate the notes into another language. Do not create a separate section for ${previousTag2 || "a previous release"}. Include breaking changes or migration steps only when explicitly supported by evidence.`;
+  const languageInstruction = shouldPublishBilingual ? `Write comprehensive bilingual release notes for the single target release ${releaseName}, based on changes since ${comparisonBase || "the repository began"}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. First write a complete English version under the heading '# English'. Then write an equivalent ${targetLanguage} translation under the heading '# ${targetLanguage}', separated from English by a horizontal rule. Keep both versions semantically equivalent. Do not create a separate section for ${comparisonBase || "a previous release"}. Include breaking changes or migration steps only when explicitly supported by evidence.` : `Write comprehensive release notes in ${targetLanguage} only for the single target release ${releaseName}, based on changes since ${comparisonBase || "the repository began"}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. Do not duplicate or translate the notes into another language. Do not create a separate section for ${comparisonBase || "a previous release"}. Include breaking changes or migration steps only when explicitly supported by evidence.`;
   return writeFinalReleaseNotes(languageInstruction, sourceMaterial);
 }
 if (!dryRun) git("fetch", "--force", "--tags", "--prune", "origin");
-git("rev-parse", "--verify", `${tag}^{commit}`);
-var tags = git("tag", "--merged", `${tag}^{commit}`, "--sort=-version:refname").split("\n").filter((candidate) => candidate && candidate !== tag && isReleaseTag(candidate));
+var comparisonTargetRef = resolveGitRef(comparisonTarget);
+var explicitComparisonBaseRef = usesExplicitComparison ? resolveGitRef(explicitComparisonBase) : "";
+var tags = usesExplicitComparison ? [] : git("tag", "--merged", `${comparisonTargetRef}^{commit}`, "--sort=-version:refname").split("\n").filter(
+  (candidate) => candidate && candidate !== comparisonTarget && isReleaseTag(candidate)
+);
 var previousTag = tags[0] || "";
-var range = previousTag ? `${previousTag}..${tag}` : tag;
-var diffBase = previousTag || "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+var comparisonBaseLabel = explicitComparisonBase || previousTag;
+var comparisonBaseRef = explicitComparisonBaseRef || previousTag;
+var range = comparisonBaseLabel ? `${comparisonBaseRef}..${comparisonTargetRef}` : comparisonTargetRef;
+var diffBase = comparisonBaseRef || "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+var resolvedComparisonBase = comparisonBaseLabel ? git("rev-parse", `${comparisonBaseRef}^{commit}`) : "";
+var resolvedComparisonTarget = git("rev-parse", `${comparisonTargetRef}^{commit}`);
+console.log(
+  `Git comparison: base=${comparisonBaseLabel || "<empty tree>"} (${resolvedComparisonBase || "none"}) target=${comparisonTarget} (${resolvedComparisonTarget}) mode=${usesExplicitComparison ? "explicit" : "semantic-tag"}`
+);
 var commits = git("log", range, "--no-merges", "--pretty=format:%h %s (%an)");
-var changedFiles = git("diff", "--stat", diffBase, tag);
-var changedFileNames = git("diff", "--name-only", "-z", diffBase, tag).split("\0").filter(Boolean);
+var changedFiles = git("diff", "--stat", diffBase, comparisonTargetRef);
+var changedFileNames = git("diff", "--name-only", "-z", diffBase, comparisonTargetRef).split("\0").filter(Boolean);
 var metadataFileNames = changedFileNames.filter(
   (filePath) => isExcludedContent(filePath) || shouldAnalyzeAsMetadata(filePath)
 );
 var textFiles = changedFileNames.filter((filePath) => !metadataFileNames.includes(filePath));
 var excludedFileNames = metadataFileNames.filter(isExcludedContent);
-var nameStatus = git("diff", "--name-status", diffBase, tag);
-var numStat = git("diff", "--numstat", diffBase, tag);
+var nameStatus = git("diff", "--name-status", diffBase, comparisonTargetRef);
+var numStat = git("diff", "--numstat", diffBase, comparisonTargetRef);
 var excludedFiles = nameStatus.split("\n").filter((line) => excludedFileNames.includes(line.split("	").at(-1))).join("\n");
 var metadataChanges = [nameStatus, numStat].flatMap((value) => value.split("\n")).filter((line) => metadataFileNames.includes(line.split("	").at(-1))).join("\n");
-var patches = collectTextPatches(diffBase, tag, textFiles);
-var repositoryFiles = git("ls-tree", "-r", "--name-only", tag).split("\n").filter(Boolean);
+var patches = collectTextPatches(diffBase, comparisonTargetRef, textFiles);
+var repositoryFiles = git("ls-tree", "-r", "--name-only", comparisonTargetRef).split("\n").filter(Boolean);
 var notes;
 var usedLlm = true;
 try {
   await verifyOllama();
   const projectProfile = await buildProjectProfile(repositoryFiles);
   notes = await generateWithModel(
-    previousTag,
+    comparisonBaseLabel,
     commits,
     changedFiles,
     excludedFiles,
@@ -1046,7 +1079,7 @@ try {
   if (failOnLlmError) throw error;
   usedLlm = false;
   console.warn(`::warning::${formatError(error)}. Publishing fallback notes.`);
-  notes = fallbackNotes(previousTag, commits, changedFiles);
+  notes = fallbackNotes(comparisonBaseLabel, commits, changedFiles);
 }
 if (templateFile) {
   const template = readFileSync(templateFile, "utf8");
@@ -1081,6 +1114,8 @@ if (dryRun) {
       env.GITHUB_OUTPUT,
       `release-url=
 previous-tag=${previousTag}
+comparison-base=${resolvedComparisonBase}
+comparison-target=${resolvedComparisonTarget}
 used-llm=${usedLlm}
 `
     );
@@ -1124,6 +1159,8 @@ if (env.GITHUB_OUTPUT) {
     env.GITHUB_OUTPUT,
     `release-url=${release.html_url}
 previous-tag=${previousTag}
+comparison-base=${resolvedComparisonBase}
+comparison-target=${resolvedComparisonTarget}
 used-llm=${usedLlm}
 `
   );

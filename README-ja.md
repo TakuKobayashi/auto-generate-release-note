@@ -73,6 +73,9 @@ jobs:
 | 名前                        | 必須   | 既定値                      | 説明                                                         |
 | --------------------------- | ------ | --------------------------- | ------------------------------------------------------------ |
 | `tag`                       | いいえ | `${{ github.ref_name }}`    | Releaseの対象タグ。                                          |
+| `release-name`              | いいえ | `tag`の値                   | 生成結果とGitHub Releaseに表示する名前。                     |
+| `comparison-base`           | いいえ | 空                          | 明示的な比較元のbranch、tag、またはcommit。                  |
+| `comparison-target`         | いいえ | 空                          | 明示的な比較元と比較するbranch、tag、またはcommit。          |
 | `model`                     | いいえ | `qwen2.5-coder:7b-instruct` | 使用するOllamaモデル。                                       |
 | `analysis-concurrency`      | いいえ | `4`                         | 同時に実行する独立した変更分析の最大数。                     |
 | `ollama-host`               | いいえ | `http://127.0.0.1:11434`    | Ollama APIのベースURL。                                      |
@@ -82,14 +85,17 @@ jobs:
 | `fail-on-llm-error`         | いいえ | `false`                     | `true` ならフォールバックせずActionを失敗させる。            |
 | `dry-run`                   | いいえ | `false`                     | Releaseを変更せず生成結果だけを出力。                        |
 | `output-file`               | いいえ | 空                          | 生成したMarkdownの保存先。                                   |
+| `template-file`             | いいえ | 空                          | 生成したリリースノートを挿入するMarkdownテンプレート。       |
 
 ## Outputs
 
-| 名前           | 説明                                                        |
-| -------------- | ----------------------------------------------------------- |
-| `release-url`  | 作成または更新したReleaseのURL。dry-runでは空。             |
-| `previous-tag` | 比較元に使用した直前のセマンティックバージョンタグ。        |
-| `used-llm`     | Ollamaで生成した場合は `true`、フォールバック時は `false`。 |
+| 名前                | 説明                                                        |
+| ------------------- | ----------------------------------------------------------- |
+| `release-url`       | 作成または更新したReleaseのURL。dry-runでは空。             |
+| `previous-tag`      | 比較元に使用した直前のセマンティックバージョンタグ。        |
+| `comparison-base`   | 実際の比較元として使用したcommit SHA。                      |
+| `comparison-target` | 実際の比較先として使用したcommit SHA。                      |
+| `used-llm`          | Ollamaで生成した場合は `true`、フォールバック時は `false`。 |
 
 後続ステップから `${{ steps.release-notes.outputs.release-url }}` のように参照できます。
 
@@ -102,6 +108,12 @@ jobs:
 ActionがローカルOllamaサーバーを起動する場合、`analysis-concurrency`は`OLLAMA_NUM_PARALLEL`にも設定されます。既に起動済みまたは外部の`ollama-host`を使う場合、サーバー側の並列数はそのホストで別途設定してください。このinputはクライアントから同時送信するリクエスト数として引き続き機能します。
 
 Action独自の文字数制限やコンテキストサイズ制限は設けません。まず関連変更グループの完全な差分をOllamaへ渡し、Ollamaがコンテキスト、トークン、メモリ容量のエラーを返した場合に限って同じ証拠を分割して再試行します。差分内容は破棄しません。
+
+### バージョンタグを使わずrelease branchを比較する
+
+`comparison-base`と`comparison-target`を両方指定すると、セマンティックバージョンタグの探索を行わず、任意のbranch、tag、commit SHA同士を比較します。[production向けサンプルworkflow](examples/production-release-notes.yml)では、`production`向けPRイベントに記録されたbase SHAとhead SHAを比較し、生成結果でPR本文を更新します。`production`や`release-candidate`のようなbranch名も指定でき、ローカルbranchが存在しない場合は対応する`origin/<branch>`を自動的に解決します。
+
+明示的な比較refは分析対象だけを制御します。GitHub Releaseを作らずPR本文だけを生成する場合は`dry-run: 'true'`を使用します。GitHub Releasesの項目を作成する場合は、GitHubの仕様上引き続き`tag`が必要です。
 
 差分内の文章は信頼できない入力として扱うようモデルへ指示していますが、LLMの出力は公開前に確認してください。外部の `ollama-host` を指定すると差分データはそのホストへ送信されます。第三者のワークフローでは完全なコミットSHAでActionを固定すると、より強いサプライチェーン保護になります。
 
@@ -120,6 +132,7 @@ node path/to/dist/index.js `
 
 既存タグを確認する場合は `--tag v1.2.3` を追加します。全オプションは `node dist/index.js --help` で確認できます。
 逐次分析を強制する場合は `--analysis-concurrency 1` を指定します。その他の正の整数を指定してOllamaホストの処理能力に合わせることもできます。
+バージョンタグを使わずbranch差分から生成する場合は、`--comparison-base production --comparison-target feature/example`を指定します。
 
 ## 開発
 

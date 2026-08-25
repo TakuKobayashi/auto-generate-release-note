@@ -4,6 +4,8 @@ const booleanOptions = new Set(['dry-run', 'fail-on-llm-error', 'bilingual']);
 const valueOptions = new Set([
   'tag',
   'release-name',
+  'comparison-base',
+  'comparison-target',
   'model',
   'analysis-concurrency',
   'language',
@@ -20,6 +22,8 @@ Options:
   --dry-run                 Generate notes without changing a GitHub Release
   --tag <tag>               Target tag (defaults to HEAD in dry-run mode)
   --release-name <name>     Display name for notes (defaults to --tag)
+  --comparison-base <ref>   Explicit branch, tag, or commit used as the diff base
+  --comparison-target <ref> Branch, tag, or commit compared with the explicit base
   --language <language>     Primary release-note language
   --bilingual               Include English before the selected non-English language
   --model <model>           Ollama model name

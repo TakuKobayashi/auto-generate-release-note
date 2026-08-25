@@ -38,6 +38,8 @@ describe('GitHub Action distribution', () => {
     assert.deepEqual(declaredInputs, [
       'tag',
       'release-name',
+      'comparison-base',
+      'comparison-target',
       'model',
       'analysis-concurrency',
       'ollama-host',
@@ -52,6 +54,15 @@ describe('GitHub Action distribution', () => {
     assert.match(metadata, /OLLAMA_NUM_PARALLEL: \$\{\{ inputs\.analysis-concurrency \}\}/);
   });
 
+  it('provides a versionless production branch comparison workflow', () => {
+    const workflow = readFileSync('examples/production-release-notes.yml', 'utf8');
+    assert.match(workflow, /branches: \[production\]/);
+    assert.match(workflow, /comparison-base: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
+    assert.match(workflow, /comparison-target: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+    assert.match(workflow, /dry-run: 'true'/);
+    assert.doesNotMatch(workflow, /\btag:/);
+  });
+
   it('runs the bundled CLI without TypeScript tooling', () => {
     const result = spawnSync(process.execPath, ['dist/index.js', '--help'], {
       encoding: 'utf8',
@@ -59,6 +70,17 @@ describe('GitHub Action distribution', () => {
 
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Usage: node dist\/index\.js/);
+  });
+
+  it('requires explicit comparison refs as a pair', () => {
+    const result = spawnSync(
+      process.execPath,
+      ['dist/index.js', '--dry-run', '--comparison-base', 'production'],
+      { encoding: 'utf8' }
+    );
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /comparison-base and comparison-target must be specified together/);
   });
 
   it('uses this action to generate and publish repository releases', () => {

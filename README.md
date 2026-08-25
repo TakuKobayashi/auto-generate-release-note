@@ -90,6 +90,8 @@ The workflow uses the sample [release pull-request template](.github/PULL_REQUES
 | --------------------------- | -------- | --------------------------- | -------------------------------------------------------------- |
 | `tag`                       | No       | `${{ github.ref_name }}`    | Tag for the GitHub Release.                                    |
 | `release-name`              | No       | Value of `tag`              | Display name used in generated notes and the GitHub Release.   |
+| `comparison-base`           | No       | Empty                       | Explicit branch, tag, or commit used as the comparison base.   |
+| `comparison-target`         | No       | Empty                       | Branch, tag, or commit compared with the explicit base.        |
 | `model`                     | No       | `qwen2.5-coder:7b-instruct` | Ollama model used for generation.                              |
 | `analysis-concurrency`      | No       | `4`                         | Maximum concurrent independent change analyses.                |
 | `ollama-host`               | No       | `http://127.0.0.1:11434`    | Base URL of the Ollama API.                                    |
@@ -103,11 +105,13 @@ The workflow uses the sample [release pull-request template](.github/PULL_REQUES
 
 ## Outputs
 
-| Name           | Description                                                         |
-| -------------- | ------------------------------------------------------------------- |
-| `release-url`  | URL of the created or updated release; empty in dry-run mode.       |
-| `previous-tag` | Previous semantic-version tag used as the comparison base.          |
-| `used-llm`     | `true` when Ollama generated the notes; `false` for fallback notes. |
+| Name                | Description                                                         |
+| ------------------- | ------------------------------------------------------------------- |
+| `release-url`       | URL of the created or updated release; empty in dry-run mode.       |
+| `previous-tag`      | Previous semantic-version tag used as the comparison base.          |
+| `comparison-base`   | Resolved commit SHA used as the effective comparison base.          |
+| `comparison-target` | Resolved commit SHA used as the effective comparison target.        |
+| `used-llm`          | `true` when Ollama generated the notes; `false` for fallback notes. |
 
 Reference an output from a later step with syntax such as `${{ steps.release-notes.outputs.release-url }}`.
 
@@ -120,6 +124,12 @@ Generation is hierarchical. The action first builds a project profile from the r
 When the action starts a local Ollama server, `analysis-concurrency` also configures `OLLAMA_NUM_PARALLEL`. For an already-running or external `ollama-host`, configure server-side parallelism on that host separately; the input still limits concurrent client requests.
 
 The action does not impose a character or context-window input limit. It first sends each complete related change group to Ollama. Only when Ollama reports a context, token, or memory-capacity failure does the action split that same evidence and retry; no diff content is discarded.
+
+### Compare release branches without version tags
+
+Set both `comparison-base` and `comparison-target` to compare any branches, tags, or commit SHAs without semantic-version discovery. The included [production release workflow](examples/production-release-notes.yml) uses the immutable base and head SHAs from a pull request targeting `production`, then updates the pull-request body with generated notes. Branch names such as `production` and `release-candidate` are also accepted; when a local branch is absent, the corresponding `origin/<branch>` is resolved automatically.
+
+Explicit comparison refs control analysis only. Use `dry-run: 'true'` when generating a pull-request body without a GitHub Release. Creating an entry in GitHub Releases still requires `tag`, because GitHub Releases are tag-backed.
 
 The prompt instructs the model to treat text from diffs as untrusted input, but you should still review LLM output before publishing it. When an external `ollama-host` is configured, diff data is sent to that host. In third-party workflows, pinning this action to a complete commit SHA provides stronger supply-chain protection than a moving version tag.
 
@@ -140,6 +150,7 @@ Add `--tag v1.2.3` to preview an existing tag. Run `node dist/index.js --help` t
 For a future release, use `--tag HEAD --release-name v1.2.3` so Git comparison and the displayed release version remain separate.
 Add `--template-file .github/PULL_REQUEST_TEMPLATE/release.md` to generate a complete pull-request body from an existing Markdown template.
 Use `--analysis-concurrency 1` to force sequential analysis, or another positive integer to match the capacity of the Ollama host.
+Use `--comparison-base production --comparison-target feature/example` to generate notes directly from branch differences without version tags.
 
 ## Development
 
