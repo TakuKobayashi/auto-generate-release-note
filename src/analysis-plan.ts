@@ -1,8 +1,5 @@
 import { extname } from 'node:path';
 
-export type TextPatch = { filePath: string; content: string };
-export type AnalysisTask = { group: string; files: string[]; evidence: string };
-
 const metadataOnlyNames = new Set([
   'package-lock.json',
   'packages-lock.json',
@@ -31,14 +28,6 @@ const projectContextNames = new Set([
   'Packages/manifest.json',
 ]);
 
-export function relatedGroup(filePath: string) {
-  const segments = filePath.replaceAll('\\', '/').split('/');
-  if (segments[0] === 'packages' && segments[1]) return `packages/${segments[1]}`;
-  if (segments[0] === 'Assets' && segments[1]) return `Assets/${segments[1]}`;
-  if (segments[0]?.startsWith('.')) return segments[0];
-  return segments.length === 1 ? 'repository root' : segments[0];
-}
-
 export function shouldAnalyzeAsMetadata(filePath: string) {
   const normalized = filePath.replaceAll('\\', '/');
   const fileName = normalized.split('/').at(-1)?.toLowerCase() || '';
@@ -50,31 +39,23 @@ export function shouldAnalyzeAsMetadata(filePath: string) {
   );
 }
 
-export function selectProjectContextFiles(paths: string[]) {
+export function selectRelevantContextFiles(paths: string[], changedPaths: string[]) {
   return paths.filter((filePath) => {
     const normalized = filePath.replaceAll('\\', '/');
     const fileName = normalized.split('/').at(-1) || '';
-    return (
+    const isContextFile =
       projectContextNames.has(normalized) ||
       projectContextNames.has(fileName) ||
-      /(^|\/)README(?:-[^/]+)?\.md$/i.test(normalized)
+      /(^|\/)README(?:-[^/]+)?\.md$/i.test(normalized);
+    if (!isContextFile || changedPaths.includes(normalized)) return false;
+
+    const directory = normalized.includes('/')
+      ? normalized.slice(0, normalized.lastIndexOf('/'))
+      : '';
+    return (
+      !directory || changedPaths.some((changedPath) => changedPath.startsWith(`${directory}/`))
     );
   });
-}
-
-export function createAnalysisTasks(patches: TextPatch[]): AnalysisTask[] {
-  const groups = new Map<string, TextPatch[]>();
-  for (const patch of patches) {
-    const group = relatedGroup(patch.filePath);
-    groups.set(group, [...(groups.get(group) || []), patch]);
-  }
-  return [...groups].map(([group, groupPatches]) => ({
-    group,
-    files: groupPatches.map(({ filePath }) => filePath),
-    evidence: groupPatches
-      .map(({ filePath, content }) => `FILE: ${filePath}\n${content}`)
-      .join('\n\n'),
-  }));
 }
 
 export function splitEvidence(evidence: string) {
@@ -88,8 +69,7 @@ export function splitEvidence(evidence: string) {
 }
 
 export function outputTokenBudget(stage: string) {
-  if (stage.startsWith('release-template')) return 4096;
-  if (stage.startsWith('final-release-notes')) return 2048;
-  if (stage.includes('project-profile') || stage.includes('consolidation')) return 1024;
+  if (stage === 'final-release-notes-template') return 4096;
+  if (stage.startsWith('final-release-notes') || stage.startsWith('change-analysis')) return 2048;
   return 768;
 }

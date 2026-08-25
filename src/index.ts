@@ -2,31 +2,15 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { extname } from 'node:path';
 import {
-  createAnalysisTasks,
   outputTokenBudget,
-  selectProjectContextFiles,
+  selectRelevantContextFiles,
   shouldAnalyzeAsMetadata,
   splitEvidence,
 } from './analysis-plan.js';
 import { helpText, parseArgs } from './cli.js';
-import {
-  buildEvidenceCoverageInstruction,
-  evidenceId,
-  stripEvidenceMarker,
-  validateEvidenceCoverage,
-} from './final-review.js';
 import { requestOllamaChat } from './ollama-request.js';
-import {
-  createProjectProfileCacheKey,
-  readCachedProjectProfile,
-  writeCachedProjectProfile,
-} from './project-profile-cache.js';
 import { isReleaseTag } from './release-tags.js';
-import {
-  assertTemplateApplicationValid,
-  buildTemplateApplicationPrompt,
-  buildTemplateReviewPrompt,
-} from './release-template.js';
+import { buildTemplateReleaseNotesInstruction } from './release-template.js';
 
 const args = parseArgs(process.argv.slice(2));
 if (args.help) {
@@ -54,7 +38,8 @@ const ollamaHost = (
 ).replace(/\/$/, '');
 const outputFile = args['output-file'] || env.INPUT_OUTPUT_FILE;
 const templateFile = args['template-file'] || env.INPUT_TEMPLATE_FILE;
-const projectProfileCacheFile = env.PROJECT_PROFILE_CACHE_FILE || '';
+const template = templateFile ? readFileSync(templateFile, 'utf8') : '';
+if (templateFile && !template.trim()) throw new Error(`Template file is empty: ${templateFile}`);
 const requestedLanguage = (args.language || env.INPUT_LANGUAGE || 'en').trim().toLowerCase();
 // `ja` is the ISO 639 language code. Accept the commonly supplied `jp`
 // country code as a convenience alias, then use only the normalized value.
@@ -574,11 +559,18 @@ function isCapacityError(error) {
   );
 }
 
-async function analyzeWithCapacityFallback(instructions, evidence, stage) {
+async function analyzeWithCapacityFallback(instructions, evidenceParts, stage) {
+  const evidence = evidenceParts.join('\n\n');
   try {
     return await runModel(`${instructions}\n\n${evidence}`, stage);
   } catch (error) {
-    const parts = splitEvidence(evidence);
+    const parts =
+      evidenceParts.length > 1
+        ? [
+            evidenceParts.slice(0, Math.ceil(evidenceParts.length / 2)),
+            evidenceParts.slice(Math.ceil(evidenceParts.length / 2)),
+          ]
+        : splitEvidence(evidence).map((part) => [part]);
     if (!isCapacityError(error) || parts.length < 2) throw error;
     console.warn(
       `::warning::${stage} exceeded the local model's available capacity; retrying its complete evidence in ${parts.length} parts.`
@@ -587,124 +579,16 @@ async function analyzeWithCapacityFallback(instructions, evidence, stage) {
     for (const [index, part] of parts.entries()) {
       summaries.push(
         await analyzeWithCapacityFallback(
-          `${instructions}\nThis is part ${index + 1}/${parts.length}; preserve facts for later consolidation.`,
+          `${instructions}\nThis is part ${index + 1}/${parts.length}; extract its facts independently for final assembly.`,
           part,
           `${stage}-part-${index + 1}`
         )
       );
     }
-    return consolidateSummaries(summaries, `${stage}-parts`);
+    return summaries
+      .map((summary, index) => `PART ${index + 1}/${summaries.length}:\n${summary}`)
+      .join('\n\n');
   }
-}
-
-async function consolidateSummaries(summaries, stage = 'consolidation') {
-  if (summaries.length === 0) return 'No source analysis was available.';
-  if (summaries.length === 1) return summaries[0];
-  const evidence = summaries
-    .map((summary, index) => `ANALYSIS ${index + 1}:\n${summary}`)
-    .join('\n\n');
-  try {
-    return await runModel(
-      [
-        'Consolidate these analyses into concise factual release-note evidence.',
-        'Preserve every distinct user-visible change, breaking change, migration requirement, fix, and important internal change.',
-        'Merge duplicates. Keep confidence distinctions. Do not add facts.',
-        '',
-        evidence,
-      ].join('\n'),
-      stage
-    );
-  } catch (error) {
-    if (!isCapacityError(error)) throw error;
-    const middle = Math.ceil(summaries.length / 2);
-    const left = await consolidateSummaries(summaries.slice(0, middle), `${stage}-left`);
-    const right = await consolidateSummaries(summaries.slice(middle), `${stage}-right`);
-    return consolidateSummaries([left, right], `${stage}-merge`);
-  }
-}
-
-async function buildProjectProfile(repositoryFiles) {
-  const contextFiles = selectProjectContextFiles(repositoryFiles);
-  const context = contextFiles
-    .map(
-      (filePath) =>
-        `PROJECT CONTEXT FILE: ${filePath}\n${git('show', `${resolvedComparisonTarget}:${filePath}`)}`
-    )
-    .join('\n\n');
-  return analyzeWithCapacityFallback(
-    [
-      'Create a compact project profile for later release-change analysis.',
-      'Identify purpose, packages/modules, application type, build and release systems, runtime requirements, and important relationships.',
-      'Distinguish facts from path-based inferences. Do not write release notes.',
-    ].join(' '),
-    `REPOSITORY FILE TREE:\n${repositoryFiles.join('\n')}\n\n${context}`,
-    'project-profile'
-  );
-}
-
-async function writeFinalReleaseNotes(languageInstruction, sourceMaterial, evidenceIds) {
-  const coverageInstruction = buildEvidenceCoverageInstruction(evidenceIds);
-  let draft;
-  try {
-    draft = await runModel(
-      `${languageInstruction}\n${coverageInstruction}\n\n${sourceMaterial}`,
-      'final-release-notes'
-    );
-  } catch (error) {
-    if (!isCapacityError(error)) throw error;
-    console.warn(
-      "::warning::Final evidence exceeded the local model's available capacity; compacting all evidence hierarchically before retrying."
-    );
-    const parts = splitEvidence(sourceMaterial);
-    const summaries = [];
-    for (const [index, part] of parts.entries()) {
-      summaries.push(
-        await analyzeWithCapacityFallback(
-          'Compact this evidence for final release-note writing. Preserve all distinct changes, confidence qualifications, breaking changes, fixes, and migration requirements. Do not write final release notes.',
-          part,
-          `final-evidence-${index + 1}/${parts.length}`
-        )
-      );
-    }
-    const compactEvidence = await consolidateSummaries(summaries, 'final-evidence-consolidation');
-    draft = await runModel(
-      `${languageInstruction}\n${coverageInstruction}\n\nCONSOLIDATED RELEASE EVIDENCE:\n${compactEvidence}`,
-      'final-release-notes-retry'
-    );
-  }
-  const validation = validateEvidenceCoverage(draft, evidenceIds);
-  if (validation.valid) {
-    console.log('Final release notes passed evidence coverage validation; skipping model review');
-    return stripEvidenceMarker(draft);
-  }
-
-  console.warn(`::warning::Final release notes require model review: ${validation.reason}`);
-  const reviewed = await runModel(
-    [
-      `Review and correct this draft for the single target release '${releaseName}'.`,
-      `The ref '${comparisonBaseLabel || 'none'}' is only the comparison base; never create a release section for it.`,
-      'Keep only claims directly supported by the supplied evidence.',
-      'Compare the draft against every detailed group analysis and restore every omitted, supported distinct change.',
-      'A one-item draft is invalid when the evidence contains multiple distinct release-relevant changes.',
-      'Delete generic claims such as code cleanup, improved user experience, unspecified fixes, removed deprecated features, dependency-update requirements, breaking changes, or migration steps unless the evidence explicitly proves them.',
-      'Prefer concrete behavior and affected components. Preserve the requested language structure and semantic equivalence.',
-      coverageInstruction,
-      'Return only the corrected final Markdown.',
-      '',
-      sourceMaterial,
-      '',
-      'DRAFT TO REVIEW:',
-      draft,
-    ].join('\n'),
-    'final-release-notes-review'
-  );
-  const reviewedValidation = validateEvidenceCoverage(reviewed, evidenceIds);
-  if (!reviewedValidation.valid) {
-    console.warn(
-      `::warning::Reviewed release notes did not return valid coverage metadata: ${reviewedValidation.reason}`
-    );
-  }
-  return stripEvidenceMarker(reviewed);
 }
 
 async function generateWithModel(
@@ -714,55 +598,50 @@ async function generateWithModel(
   excludedFiles,
   patches,
   metadataChanges,
-  projectProfile
+  contextFiles
 ) {
-  const tasks = createAnalysisTasks(patches);
   console.log(
-    `Analyzing complete diffs for ${patches.length} text files in ${tasks.length} related groups with capacity fallback only when Ollama rejects a request`
+    `Analyzing ${patches.length} complete text diffs and ${contextFiles.length} directly relevant context files in one request; splitting only if Ollama rejects it`
   );
-  const summaries = [];
-  for (const [index, task] of tasks.entries()) {
-    summaries.push(
-      await analyzeWithCapacityFallback(
-        [
-          `Analyze related change group ${index + 1}/${tasks.length} in project area '${task.group}'.`,
-          `Files in this group: ${task.files.join(', ')}`,
-          `Related changed files: ${changedFiles}`,
-          `Project profile: ${projectProfile}`,
-          'Extract concise factual candidate release-note items from this evidence.',
-          'Relate it to the project and other changed files only when evidence supports the relationship.',
-          'Do not write final release-note prose. Do not omit a change merely because it is internal.',
-        ].join('\n'),
-        task.evidence,
-        `analysis-${index + 1}/${tasks.length}-${task.group}`
-      )
-    );
-  }
-  if (metadataChanges) {
-    summaries.push(
-      await analyzeWithCapacityFallback(
-        [
-          'Infer release-relevant meaning for changed generated, lock, binary, and serialized asset files.',
-          'Use the project profile, paths, change statuses, statistics, and commits. Do not claim to have read excluded contents.',
-          'For lockfiles, infer dependency updates only when manifests or commits support it.',
-          'For Unity scenes, prefabs, and assets, describe their likely affected project area and clearly retain uncertainty.',
-          `Project profile: ${projectProfile}`,
-          `Commits: ${commits}`,
-        ].join('\n'),
-        metadataChanges,
-        'metadata-and-assets'
-      )
-    );
-  }
-  const evidenceIds = summaries.map((_, index) => evidenceId(index));
-  const detailedAnalyses = summaries
-    .map((summary, index) => `CHANGE GROUP ${evidenceIds[index]}:\n${summary}`)
-    .join('\n\n');
-  const sourceMaterial = `PROJECT PROFILE:\n${projectProfile}\n\nCOMMITS:\n${commits}\n\nCHANGED FILES:\n${changedFiles}\n\nCONTENT-EXCLUDED FILES:\n${excludedFiles || 'None'}\n\nDETAILED GROUP ANALYSES (use these to prevent omissions):\n${detailedAnalyses}`;
+  const evidenceParts = [
+    ...contextFiles.map(({ path, content }) => `RELEVANT CONTEXT FILE: ${path}\n${content}`),
+    ...patches.map(({ filePath, content }) => `CHANGED TEXT FILE: ${filePath}\n${content}`),
+    ...(metadataChanges ? [`METADATA-ONLY CHANGES:\n${metadataChanges}`] : []),
+  ];
+  if (evidenceParts.length === 0) evidenceParts.push('No readable text diff was available.');
+  const candidates = await analyzeWithCapacityFallback(
+    [
+      `Extract factual release-note candidates for release '${releaseName}'.`,
+      `Comparison base: ${comparisonBase || 'the repository began'}`,
+      `Commits:\n${commits || 'No commit subjects are available.'}`,
+      `Changed-file summary:\n${changedFiles || 'No changed-file statistics are available.'}`,
+      `Content-excluded files:\n${excludedFiles || 'None'}`,
+      'Read the changed source and directly relevant context supplied below.',
+      'Treat tests, documentation, manifests, generated outputs, and implementation files as supporting evidence for the same underlying changes rather than separate features.',
+      'For lockfiles, generated files, binary assets, and serialized scenes, infer only what paths, statistics, commits, manifests, and related source changes support.',
+      'Produce concise candidate facts, not polished release-note prose. Include user-visible changes, fixes, compatibility or migration needs, and important maintainer changes. Do not invent facts.',
+    ].join('\n'),
+    evidenceParts,
+    'change-analysis'
+  );
   const languageInstruction = shouldPublishBilingual
-    ? `Write comprehensive bilingual release notes for the single target release ${releaseName}, based on changes since ${comparisonBase || 'the repository began'}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. First write a complete English version under the heading '# English'. Then write an equivalent ${targetLanguage} translation under the heading '# ${targetLanguage}', separated from English by a horizontal rule. Keep both versions semantically equivalent. Do not create a separate section for ${comparisonBase || 'a previous release'}. Include breaking changes or migration steps only when explicitly supported by evidence.`
-    : `Write comprehensive release notes in ${targetLanguage} only for the single target release ${releaseName}, based on changes since ${comparisonBase || 'the repository began'}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. Do not duplicate or translate the notes into another language. Do not create a separate section for ${comparisonBase || 'a previous release'}. Include breaking changes or migration steps only when explicitly supported by evidence.`;
-  return writeFinalReleaseNotes(languageInstruction, sourceMaterial, evidenceIds);
+    ? `Write useful bilingual release notes for the single target release ${releaseName}. First write a complete English version under '# English', then an equivalent ${targetLanguage} translation under '# ${targetLanguage}', separated by a horizontal rule. Keep both versions semantically equivalent.`
+    : `Write useful release notes in ${targetLanguage} only for the single target release ${releaseName}. Do not duplicate or translate the notes into another language.`;
+  const outputInstruction = template
+    ? buildTemplateReleaseNotesInstruction(template, releaseName)
+    : 'Return only the final Markdown release notes, without a code fence around the whole response.';
+  return runModel(
+    [
+      languageInstruction,
+      `The ref '${comparisonBase || 'none'}' is only the comparison base; do not create a release section for it.`,
+      'Organize the candidate facts into clear release-note sections. Merge duplicates and omit unsupported claims. Include breaking changes or migration steps only when the candidates support them.',
+      outputInstruction,
+      '',
+      'RELEASE-NOTE CANDIDATES:',
+      candidates,
+    ].join('\n'),
+    template ? 'final-release-notes-template' : 'final-release-notes'
+  );
 }
 
 if (!dryRun) git('fetch', '--force', '--tags', '--prune', 'origin');
@@ -821,27 +700,12 @@ let notes;
 let usedLlm = true;
 try {
   await verifyOllama();
-  const projectContextFiles = selectProjectContextFiles(repositoryFiles).map((path) => ({
-    path,
-    content: git('show', `${resolvedComparisonTarget}:${path}`),
-  }));
-  const projectProfileCacheKey = createProjectProfileCacheKey(
-    model,
-    repositoryFiles,
-    projectContextFiles
+  const contextFiles = selectRelevantContextFiles(repositoryFiles, changedFileNames).map(
+    (path) => ({
+      path,
+      content: git('show', `${resolvedComparisonTarget}:${path}`),
+    })
   );
-  let projectProfile = projectProfileCacheFile
-    ? readCachedProjectProfile(projectProfileCacheFile, projectProfileCacheKey)
-    : '';
-  if (projectProfile) {
-    console.log('Using cached project profile for unchanged project context');
-  } else {
-    projectProfile = await buildProjectProfile(repositoryFiles);
-    if (projectProfileCacheFile) {
-      writeCachedProjectProfile(projectProfileCacheFile, projectProfileCacheKey, projectProfile);
-      console.log('Cached project profile for reuse with unchanged project context');
-    }
-  }
   notes = await generateWithModel(
     comparisonBaseLabel,
     commits,
@@ -849,35 +713,13 @@ try {
     excludedFiles,
     patches,
     metadataChanges,
-    projectProfile
+    contextFiles
   );
 } catch (error) {
   if (failOnLlmError) throw error;
   usedLlm = false;
   console.warn(`::warning::${formatError(error)}. Publishing fallback notes.`);
   notes = fallbackNotes(comparisonBaseLabel, commits, changedFiles);
-}
-
-if (templateFile) {
-  const template = readFileSync(templateFile, 'utf8');
-  if (!template.trim()) throw new Error(`Template file is empty: ${templateFile}`);
-  const generatedNotes = notes;
-  const populatedTemplate = await runModel(
-    buildTemplateApplicationPrompt(template, notes, releaseName),
-    'release-template-application'
-  );
-  try {
-    assertTemplateApplicationValid(template, generatedNotes, populatedTemplate);
-    notes = populatedTemplate;
-    console.log('Template application passed deterministic validation; skipping model review');
-  } catch (error) {
-    console.warn(`::warning::Template application requires model review: ${formatError(error)}`);
-    notes = await runModel(
-      buildTemplateReviewPrompt(template, generatedNotes, populatedTemplate, releaseName),
-      'release-template-review'
-    );
-    assertTemplateApplicationValid(template, generatedNotes, notes);
-  }
 }
 
 if (outputFile) {

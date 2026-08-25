@@ -1,6 +1,6 @@
 // src/index.ts
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { extname as extname2 } from "node:path";
 
 // src/analysis-plan.ts
@@ -32,37 +32,20 @@ var projectContextNames = /* @__PURE__ */ new Set([
   "ProjectSettings/ProjectVersion.txt",
   "Packages/manifest.json"
 ]);
-function relatedGroup(filePath) {
-  const segments = filePath.replaceAll("\\", "/").split("/");
-  if (segments[0] === "packages" && segments[1]) return `packages/${segments[1]}`;
-  if (segments[0] === "Assets" && segments[1]) return `Assets/${segments[1]}`;
-  if (segments[0]?.startsWith(".")) return segments[0];
-  return segments.length === 1 ? "repository root" : segments[0];
-}
 function shouldAnalyzeAsMetadata(filePath) {
   const normalized = filePath.replaceAll("\\", "/");
   const fileName = normalized.split("/").at(-1)?.toLowerCase() || "";
   return metadataOnlyNames.has(fileName) || metadataOnlyExtensions.has(extname(fileName).toLowerCase()) || /(^|\/)(dist|build|generated|vendor)(\/|$)/i.test(normalized) || /\.(min\.(js|css)|snap)$/i.test(normalized);
 }
-function selectProjectContextFiles(paths) {
+function selectRelevantContextFiles(paths, changedPaths) {
   return paths.filter((filePath) => {
     const normalized = filePath.replaceAll("\\", "/");
     const fileName = normalized.split("/").at(-1) || "";
-    return projectContextNames.has(normalized) || projectContextNames.has(fileName) || /(^|\/)README(?:-[^/]+)?\.md$/i.test(normalized);
+    const isContextFile = projectContextNames.has(normalized) || projectContextNames.has(fileName) || /(^|\/)README(?:-[^/]+)?\.md$/i.test(normalized);
+    if (!isContextFile || changedPaths.includes(normalized)) return false;
+    const directory = normalized.includes("/") ? normalized.slice(0, normalized.lastIndexOf("/")) : "";
+    return !directory || changedPaths.some((changedPath) => changedPath.startsWith(`${directory}/`));
   });
-}
-function createAnalysisTasks(patches2) {
-  const groups = /* @__PURE__ */ new Map();
-  for (const patch of patches2) {
-    const group = relatedGroup(patch.filePath);
-    groups.set(group, [...groups.get(group) || [], patch]);
-  }
-  return [...groups].map(([group, groupPatches]) => ({
-    group,
-    files: groupPatches.map(({ filePath }) => filePath),
-    evidence: groupPatches.map(({ filePath, content }) => `FILE: ${filePath}
-${content}`).join("\n\n")
-  }));
 }
 function splitEvidence(evidence) {
   const lines = evidence.split("\n");
@@ -74,9 +57,8 @@ function splitEvidence(evidence) {
   return [lines.slice(0, middle).join("\n"), lines.slice(middle).join("\n")].filter(Boolean);
 }
 function outputTokenBudget(stage) {
-  if (stage.startsWith("release-template")) return 4096;
-  if (stage.startsWith("final-release-notes")) return 2048;
-  if (stage.includes("project-profile") || stage.includes("consolidation")) return 1024;
+  if (stage === "final-release-notes-template") return 4096;
+  if (stage.startsWith("final-release-notes") || stage.startsWith("change-analysis")) return 2048;
   return 768;
 }
 
@@ -139,49 +121,6 @@ function parseArgs(argv) {
     options[rawName] = value;
   }
   return options;
-}
-
-// src/final-review.ts
-var evidenceMarkerPattern = /<!--\s*release-note-evidence:\s*([^>]+?)\s*-->/gi;
-function evidenceId(index) {
-  return `G${String(index + 1).padStart(3, "0")}`;
-}
-function buildEvidenceCoverageInstruction(evidenceIds) {
-  const expected = evidenceIds.length > 0 ? evidenceIds.join(",") : "NONE";
-  return [
-    "Reflect every distinct supported release-relevant change from each labeled change group.",
-    `After doing so, append exactly this machine-readable marker as the final line: <!-- release-note-evidence: ${expected} -->`,
-    "Include a group ID in that marker only after its supported changes have been reflected in the notes.",
-    "The marker is validation metadata and must not be explained or placed in a code fence."
-  ].join(" ");
-}
-function validateEvidenceCoverage(draft, expectedIds) {
-  const matches = [...draft.matchAll(evidenceMarkerPattern)];
-  if (matches.length !== 1) {
-    return {
-      valid: false,
-      reason: `expected exactly one evidence marker, found ${matches.length}`
-    };
-  }
-  if (draft.slice(matches[0].index + matches[0][0].length).trim()) {
-    return { valid: false, reason: "evidence marker is not the final line" };
-  }
-  const actual = matches[0][1].split(",").map((value) => value.trim()).filter(Boolean);
-  const expected = expectedIds.length > 0 ? expectedIds : ["NONE"];
-  if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {
-    return {
-      valid: false,
-      reason: `evidence marker was '${actual.join(",")}' instead of '${expected.join(",")}'`
-    };
-  }
-  const publishable = stripEvidenceMarker(draft);
-  if (publishable.length < 20 || !/^#{1,6}\s+\S+/m.test(publishable)) {
-    return { valid: false, reason: "draft does not contain substantive Markdown release notes" };
-  }
-  return { valid: true, reason: "" };
-}
-function stripEvidenceMarker(draft) {
-  return draft.replace(evidenceMarkerPattern, "").trim();
 }
 
 // src/ollama-request.ts
@@ -265,112 +204,25 @@ function requestOllamaChat({
   });
 }
 
-// src/project-profile-cache.ts
-import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-var projectProfileSchema = "project-profile-v1";
-function createProjectProfileCacheKey(model2, repositoryFiles2, contextFiles) {
-  return createHash("sha256").update(
-    JSON.stringify({
-      schema: projectProfileSchema,
-      model: model2,
-      repositoryFiles: repositoryFiles2,
-      contextFiles
-    })
-  ).digest("hex");
-}
-function readCachedProjectProfile(cacheFile, expectedKey) {
-  try {
-    const cached = JSON.parse(readFileSync(cacheFile, "utf8"));
-    if (cached.key === expectedKey && typeof cached.profile === "string" && cached.profile.trim()) {
-      return cached.profile;
-    }
-  } catch {
-  }
-  return "";
-}
-function writeCachedProjectProfile(cacheFile, key, profile) {
-  mkdirSync(dirname(cacheFile), { recursive: true });
-  writeFileSync(cacheFile, `${JSON.stringify({ key, profile })}
-`);
-}
-
 // src/release-tags.ts
 function isReleaseTag(value) {
   return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value);
 }
 
 // src/release-template.ts
-function buildTemplateApplicationPrompt(template, releaseNotes, releaseName2) {
+function buildTemplateReleaseNotesInstruction(template2, releaseName2) {
   return [
-    `Populate the pull-request Markdown template for release '${releaseName2}'.`,
+    `Write the final release notes directly into this Markdown template for release '${releaseName2}'.`,
     "Determine the intended release-notes location from its headings, instructions, comments, and placeholder text.",
-    "Insert the supplied release notes verbatim, preserving every character and Markdown element.",
     "Replace only the placeholder or empty content intended for release notes.",
     "Preserve the complete template structure and all unrelated wording, headings, links, comments, and checklist states exactly.",
-    "Do not mark checkboxes, answer unrelated questions, add facts, summarize the supplied notes, or wrap the result in a code fence.",
+    "Do not mark checkboxes, answer unrelated questions, add unsupported facts, or wrap the result in a code fence.",
     "Return the complete populated Markdown template and nothing else.",
     "",
     "<pull_request_template>",
-    template,
-    "</pull_request_template>",
-    "",
-    "<generated_release_notes>",
-    releaseNotes,
-    "</generated_release_notes>"
+    template2,
+    "</pull_request_template>"
   ].join("\n");
-}
-function buildTemplateReviewPrompt(template, releaseNotes, populatedTemplate, releaseName2) {
-  return [
-    `Review the populated pull-request template for release '${releaseName2}'.`,
-    "Correct it only if needed so the complete generated release notes appear verbatim in the most appropriate release-note section.",
-    "The original template is authoritative. Preserve all of its unrelated headings, wording, links, comments, and unchecked checklist states exactly.",
-    "Remove the release-note placeholder, but do not alter unrelated placeholders or answer unrelated questions.",
-    "Return the complete corrected Markdown template and nothing else.",
-    "",
-    "<original_template>",
-    template,
-    "</original_template>",
-    "",
-    "<generated_release_notes>",
-    releaseNotes,
-    "</generated_release_notes>",
-    "",
-    "<populated_template_to_review>",
-    populatedTemplate,
-    "</populated_template_to_review>"
-  ].join("\n");
-}
-function assertTemplateScaffoldingPreserved(template, result) {
-  const protectedLines = template.split("\r\n").join("\n").split("\n").filter((line) => /^(#{1,6})\s+\S/.test(line) || /^\s*- \[[ xX]\]\s+/.test(line));
-  const comments = template.match(/<!--[\s\S]*?-->/g) || [];
-  const missing = [...protectedLines, ...comments].filter((part) => !result.includes(part));
-  if (missing.length > 0) {
-    throw new Error(
-      `The model did not preserve required template structure: ${missing.map((part) => JSON.stringify(part)).join(", ")}`
-    );
-  }
-}
-function assertTemplateApplicationValid(template, releaseNotes, result) {
-  assertTemplateScaffoldingPreserved(template, result);
-  if (!result.includes(releaseNotes)) {
-    throw new Error("The model did not preserve the complete generated release notes");
-  }
-  if (result.trim() === template.trim()) {
-    throw new Error("The model returned the template without inserting release notes");
-  }
-  const placeholderLines = template.split(/\r?\n/).filter(
-    (line) => /(placeholder|insert(?:ed)? here|generated here|release notes? (?:go|goes|will be|are) (?:here|below)|ここに.{0,20}(?:挿入|記載|生成))/i.test(
-      line
-    )
-  );
-  const remainingPlaceholders = placeholderLines.filter((line) => result.includes(line));
-  if (remainingPlaceholders.length > 0) {
-    throw new Error(
-      `The model left release-note placeholder text in the template: ${remainingPlaceholders.map((line) => JSON.stringify(line)).join(", ")}`
-    );
-  }
 }
 
 // src/index.ts
@@ -395,7 +247,8 @@ var model = args.model || env.INPUT_MODEL || "qwen2.5-coder:7b-instruct";
 var ollamaHost = (args["ollama-host"] || env.INPUT_OLLAMA_HOST || "http://127.0.0.1:11434").replace(/\/$/, "");
 var outputFile = args["output-file"] || env.INPUT_OUTPUT_FILE;
 var templateFile = args["template-file"] || env.INPUT_TEMPLATE_FILE;
-var projectProfileCacheFile = env.PROJECT_PROFILE_CACHE_FILE || "";
+var template = templateFile ? readFileSync(templateFile, "utf8") : "";
+if (templateFile && !template.trim()) throw new Error(`Template file is empty: ${templateFile}`);
 var requestedLanguage = (args.language || env.INPUT_LANGUAGE || "en").trim().toLowerCase();
 var normalizedLanguage = requestedLanguage === "jp" ? "ja" : requestedLanguage;
 var languageAliases = {
@@ -888,13 +741,17 @@ function isCapacityError(error) {
     formatError(error)
   );
 }
-async function analyzeWithCapacityFallback(instructions, evidence, stage) {
+async function analyzeWithCapacityFallback(instructions, evidenceParts, stage) {
+  const evidence = evidenceParts.join("\n\n");
   try {
     return await runModel(`${instructions}
 
 ${evidence}`, stage);
   } catch (error) {
-    const parts = splitEvidence(evidence);
+    const parts = evidenceParts.length > 1 ? [
+      evidenceParts.slice(0, Math.ceil(evidenceParts.length / 2)),
+      evidenceParts.slice(Math.ceil(evidenceParts.length / 2))
+    ] : splitEvidence(evidence).map((part) => [part]);
     if (!isCapacityError(error) || parts.length < 2) throw error;
     console.warn(
       `::warning::${stage} exceeded the local model's available capacity; retrying its complete evidence in ${parts.length} parts.`
@@ -904,186 +761,61 @@ ${evidence}`, stage);
       summaries.push(
         await analyzeWithCapacityFallback(
           `${instructions}
-This is part ${index + 1}/${parts.length}; preserve facts for later consolidation.`,
+This is part ${index + 1}/${parts.length}; extract its facts independently for final assembly.`,
           part,
           `${stage}-part-${index + 1}`
         )
       );
     }
-    return consolidateSummaries(summaries, `${stage}-parts`);
-  }
-}
-async function consolidateSummaries(summaries, stage = "consolidation") {
-  if (summaries.length === 0) return "No source analysis was available.";
-  if (summaries.length === 1) return summaries[0];
-  const evidence = summaries.map((summary, index) => `ANALYSIS ${index + 1}:
+    return summaries.map((summary, index) => `PART ${index + 1}/${summaries.length}:
 ${summary}`).join("\n\n");
-  try {
-    return await runModel(
-      [
-        "Consolidate these analyses into concise factual release-note evidence.",
-        "Preserve every distinct user-visible change, breaking change, migration requirement, fix, and important internal change.",
-        "Merge duplicates. Keep confidence distinctions. Do not add facts.",
-        "",
-        evidence
-      ].join("\n"),
-      stage
-    );
-  } catch (error) {
-    if (!isCapacityError(error)) throw error;
-    const middle = Math.ceil(summaries.length / 2);
-    const left = await consolidateSummaries(summaries.slice(0, middle), `${stage}-left`);
-    const right = await consolidateSummaries(summaries.slice(middle), `${stage}-right`);
-    return consolidateSummaries([left, right], `${stage}-merge`);
   }
 }
-async function buildProjectProfile(repositoryFiles2) {
-  const contextFiles = selectProjectContextFiles(repositoryFiles2);
-  const context = contextFiles.map(
-    (filePath) => `PROJECT CONTEXT FILE: ${filePath}
-${git("show", `${resolvedComparisonTarget}:${filePath}`)}`
-  ).join("\n\n");
-  return analyzeWithCapacityFallback(
-    [
-      "Create a compact project profile for later release-change analysis.",
-      "Identify purpose, packages/modules, application type, build and release systems, runtime requirements, and important relationships.",
-      "Distinguish facts from path-based inferences. Do not write release notes."
-    ].join(" "),
-    `REPOSITORY FILE TREE:
-${repositoryFiles2.join("\n")}
-
-${context}`,
-    "project-profile"
-  );
-}
-async function writeFinalReleaseNotes(languageInstruction, sourceMaterial, evidenceIds) {
-  const coverageInstruction = buildEvidenceCoverageInstruction(evidenceIds);
-  let draft;
-  try {
-    draft = await runModel(
-      `${languageInstruction}
-${coverageInstruction}
-
-${sourceMaterial}`,
-      "final-release-notes"
-    );
-  } catch (error) {
-    if (!isCapacityError(error)) throw error;
-    console.warn(
-      "::warning::Final evidence exceeded the local model's available capacity; compacting all evidence hierarchically before retrying."
-    );
-    const parts = splitEvidence(sourceMaterial);
-    const summaries = [];
-    for (const [index, part] of parts.entries()) {
-      summaries.push(
-        await analyzeWithCapacityFallback(
-          "Compact this evidence for final release-note writing. Preserve all distinct changes, confidence qualifications, breaking changes, fixes, and migration requirements. Do not write final release notes.",
-          part,
-          `final-evidence-${index + 1}/${parts.length}`
-        )
-      );
-    }
-    const compactEvidence = await consolidateSummaries(summaries, "final-evidence-consolidation");
-    draft = await runModel(
-      `${languageInstruction}
-${coverageInstruction}
-
-CONSOLIDATED RELEASE EVIDENCE:
-${compactEvidence}`,
-      "final-release-notes-retry"
-    );
-  }
-  const validation = validateEvidenceCoverage(draft, evidenceIds);
-  if (validation.valid) {
-    console.log("Final release notes passed evidence coverage validation; skipping model review");
-    return stripEvidenceMarker(draft);
-  }
-  console.warn(`::warning::Final release notes require model review: ${validation.reason}`);
-  const reviewed = await runModel(
-    [
-      `Review and correct this draft for the single target release '${releaseName}'.`,
-      `The ref '${comparisonBaseLabel || "none"}' is only the comparison base; never create a release section for it.`,
-      "Keep only claims directly supported by the supplied evidence.",
-      "Compare the draft against every detailed group analysis and restore every omitted, supported distinct change.",
-      "A one-item draft is invalid when the evidence contains multiple distinct release-relevant changes.",
-      "Delete generic claims such as code cleanup, improved user experience, unspecified fixes, removed deprecated features, dependency-update requirements, breaking changes, or migration steps unless the evidence explicitly proves them.",
-      "Prefer concrete behavior and affected components. Preserve the requested language structure and semantic equivalence.",
-      coverageInstruction,
-      "Return only the corrected final Markdown.",
-      "",
-      sourceMaterial,
-      "",
-      "DRAFT TO REVIEW:",
-      draft
-    ].join("\n"),
-    "final-release-notes-review"
-  );
-  const reviewedValidation = validateEvidenceCoverage(reviewed, evidenceIds);
-  if (!reviewedValidation.valid) {
-    console.warn(
-      `::warning::Reviewed release notes did not return valid coverage metadata: ${reviewedValidation.reason}`
-    );
-  }
-  return stripEvidenceMarker(reviewed);
-}
-async function generateWithModel(comparisonBase, commits2, changedFiles2, excludedFiles2, patches2, metadataChanges2, projectProfile) {
-  const tasks = createAnalysisTasks(patches2);
+async function generateWithModel(comparisonBase, commits2, changedFiles2, excludedFiles2, patches2, metadataChanges2, contextFiles) {
   console.log(
-    `Analyzing complete diffs for ${patches2.length} text files in ${tasks.length} related groups with capacity fallback only when Ollama rejects a request`
+    `Analyzing ${patches2.length} complete text diffs and ${contextFiles.length} directly relevant context files in one request; splitting only if Ollama rejects it`
   );
-  const summaries = [];
-  for (const [index, task] of tasks.entries()) {
-    summaries.push(
-      await analyzeWithCapacityFallback(
-        [
-          `Analyze related change group ${index + 1}/${tasks.length} in project area '${task.group}'.`,
-          `Files in this group: ${task.files.join(", ")}`,
-          `Related changed files: ${changedFiles2}`,
-          `Project profile: ${projectProfile}`,
-          "Extract concise factual candidate release-note items from this evidence.",
-          "Relate it to the project and other changed files only when evidence supports the relationship.",
-          "Do not write final release-note prose. Do not omit a change merely because it is internal."
-        ].join("\n"),
-        task.evidence,
-        `analysis-${index + 1}/${tasks.length}-${task.group}`
-      )
-    );
-  }
-  if (metadataChanges2) {
-    summaries.push(
-      await analyzeWithCapacityFallback(
-        [
-          "Infer release-relevant meaning for changed generated, lock, binary, and serialized asset files.",
-          "Use the project profile, paths, change statuses, statistics, and commits. Do not claim to have read excluded contents.",
-          "For lockfiles, infer dependency updates only when manifests or commits support it.",
-          "For Unity scenes, prefabs, and assets, describe their likely affected project area and clearly retain uncertainty.",
-          `Project profile: ${projectProfile}`,
-          `Commits: ${commits2}`
-        ].join("\n"),
-        metadataChanges2,
-        "metadata-and-assets"
-      )
-    );
-  }
-  const evidenceIds = summaries.map((_, index) => evidenceId(index));
-  const detailedAnalyses = summaries.map((summary, index) => `CHANGE GROUP ${evidenceIds[index]}:
-${summary}`).join("\n\n");
-  const sourceMaterial = `PROJECT PROFILE:
-${projectProfile}
-
-COMMITS:
-${commits2}
-
-CHANGED FILES:
-${changedFiles2}
-
-CONTENT-EXCLUDED FILES:
-${excludedFiles2 || "None"}
-
-DETAILED GROUP ANALYSES (use these to prevent omissions):
-${detailedAnalyses}`;
-  const languageInstruction = shouldPublishBilingual ? `Write comprehensive bilingual release notes for the single target release ${releaseName}, based on changes since ${comparisonBase || "the repository began"}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. First write a complete English version under the heading '# English'. Then write an equivalent ${targetLanguage} translation under the heading '# ${targetLanguage}', separated from English by a horizontal rule. Keep both versions semantically equivalent. Do not create a separate section for ${comparisonBase || "a previous release"}. Include breaking changes or migration steps only when explicitly supported by evidence.` : `Write comprehensive release notes in ${targetLanguage} only for the single target release ${releaseName}, based on changes since ${comparisonBase || "the repository began"}. Cover every distinct supported change from the detailed group analyses without replacing specifics with generic claims. Do not duplicate or translate the notes into another language. Do not create a separate section for ${comparisonBase || "a previous release"}. Include breaking changes or migration steps only when explicitly supported by evidence.`;
-  return writeFinalReleaseNotes(languageInstruction, sourceMaterial, evidenceIds);
+  const evidenceParts = [
+    ...contextFiles.map(({ path, content }) => `RELEVANT CONTEXT FILE: ${path}
+${content}`),
+    ...patches2.map(({ filePath, content }) => `CHANGED TEXT FILE: ${filePath}
+${content}`),
+    ...metadataChanges2 ? [`METADATA-ONLY CHANGES:
+${metadataChanges2}`] : []
+  ];
+  if (evidenceParts.length === 0) evidenceParts.push("No readable text diff was available.");
+  const candidates = await analyzeWithCapacityFallback(
+    [
+      `Extract factual release-note candidates for release '${releaseName}'.`,
+      `Comparison base: ${comparisonBase || "the repository began"}`,
+      `Commits:
+${commits2 || "No commit subjects are available."}`,
+      `Changed-file summary:
+${changedFiles2 || "No changed-file statistics are available."}`,
+      `Content-excluded files:
+${excludedFiles2 || "None"}`,
+      "Read the changed source and directly relevant context supplied below.",
+      "Treat tests, documentation, manifests, generated outputs, and implementation files as supporting evidence for the same underlying changes rather than separate features.",
+      "For lockfiles, generated files, binary assets, and serialized scenes, infer only what paths, statistics, commits, manifests, and related source changes support.",
+      "Produce concise candidate facts, not polished release-note prose. Include user-visible changes, fixes, compatibility or migration needs, and important maintainer changes. Do not invent facts."
+    ].join("\n"),
+    evidenceParts,
+    "change-analysis"
+  );
+  const languageInstruction = shouldPublishBilingual ? `Write useful bilingual release notes for the single target release ${releaseName}. First write a complete English version under '# English', then an equivalent ${targetLanguage} translation under '# ${targetLanguage}', separated by a horizontal rule. Keep both versions semantically equivalent.` : `Write useful release notes in ${targetLanguage} only for the single target release ${releaseName}. Do not duplicate or translate the notes into another language.`;
+  const outputInstruction = template ? buildTemplateReleaseNotesInstruction(template, releaseName) : "Return only the final Markdown release notes, without a code fence around the whole response.";
+  return runModel(
+    [
+      languageInstruction,
+      `The ref '${comparisonBase || "none"}' is only the comparison base; do not create a release section for it.`,
+      "Organize the candidate facts into clear release-note sections. Merge duplicates and omit unsupported claims. Include breaking changes or migration steps only when the candidates support them.",
+      outputInstruction,
+      "",
+      "RELEASE-NOTE CANDIDATES:",
+      candidates
+    ].join("\n"),
+    template ? "final-release-notes-template" : "final-release-notes"
+  );
 }
 if (!dryRun) git("fetch", "--force", "--tags", "--prune", "origin");
 var comparisonTargetRef = resolveGitRef(comparisonTarget);
@@ -1119,25 +851,12 @@ var notes;
 var usedLlm = true;
 try {
   await verifyOllama();
-  const projectContextFiles = selectProjectContextFiles(repositoryFiles).map((path) => ({
-    path,
-    content: git("show", `${resolvedComparisonTarget}:${path}`)
-  }));
-  const projectProfileCacheKey = createProjectProfileCacheKey(
-    model,
-    repositoryFiles,
-    projectContextFiles
+  const contextFiles = selectRelevantContextFiles(repositoryFiles, changedFileNames).map(
+    (path) => ({
+      path,
+      content: git("show", `${resolvedComparisonTarget}:${path}`)
+    })
   );
-  let projectProfile = projectProfileCacheFile ? readCachedProjectProfile(projectProfileCacheFile, projectProfileCacheKey) : "";
-  if (projectProfile) {
-    console.log("Using cached project profile for unchanged project context");
-  } else {
-    projectProfile = await buildProjectProfile(repositoryFiles);
-    if (projectProfileCacheFile) {
-      writeCachedProjectProfile(projectProfileCacheFile, projectProfileCacheKey, projectProfile);
-      console.log("Cached project profile for reuse with unchanged project context");
-    }
-  }
   notes = await generateWithModel(
     comparisonBaseLabel,
     commits,
@@ -1145,7 +864,7 @@ try {
     excludedFiles,
     patches,
     metadataChanges,
-    projectProfile
+    contextFiles
   );
 } catch (error) {
   if (failOnLlmError) throw error;
@@ -1153,29 +872,8 @@ try {
   console.warn(`::warning::${formatError(error)}. Publishing fallback notes.`);
   notes = fallbackNotes(comparisonBaseLabel, commits, changedFiles);
 }
-if (templateFile) {
-  const template = readFileSync2(templateFile, "utf8");
-  if (!template.trim()) throw new Error(`Template file is empty: ${templateFile}`);
-  const generatedNotes = notes;
-  const populatedTemplate = await runModel(
-    buildTemplateApplicationPrompt(template, notes, releaseName),
-    "release-template-application"
-  );
-  try {
-    assertTemplateApplicationValid(template, generatedNotes, populatedTemplate);
-    notes = populatedTemplate;
-    console.log("Template application passed deterministic validation; skipping model review");
-  } catch (error) {
-    console.warn(`::warning::Template application requires model review: ${formatError(error)}`);
-    notes = await runModel(
-      buildTemplateReviewPrompt(template, generatedNotes, populatedTemplate, releaseName),
-      "release-template-review"
-    );
-    assertTemplateApplicationValid(template, generatedNotes, notes);
-  }
-}
 if (outputFile) {
-  writeFileSync2(outputFile, `${notes}
+  writeFileSync(outputFile, `${notes}
 `);
   console.log(`Wrote release-note preview to ${outputFile}`);
 }

@@ -48,7 +48,7 @@ jobs:
 
 `fetch-depth: 0` is required so the action can read previous tags and diffs. The workflow also needs `contents: write` permission to create or update a release.
 
-On its first run, the action installs Ollama and the default model on a GitHub-hosted Linux runner. Model downloads and CPU inference can take time. The generated project profile is cached by project context and model for later workflow runs. For faster execution, use a self-hosted runner with Ollama already installed.
+On its first run, the action installs Ollama and the default model on a GitHub-hosted Linux runner. Model downloads and CPU inference can take time. For faster execution, use a self-hosted runner with Ollama already installed.
 
 ### Generate both Japanese and English
 
@@ -82,7 +82,7 @@ The included [release-pr workflow](.github/workflows/release-pr.yml) supports a 
 When copying this workflow into a repository that consumes the published action, replace `uses: ./` with `uses: TakuKobayashi/auto-generate-release-note@v2`.
 The repository setting **Allow GitHub Actions to create and approve pull requests** must permit pull-request creation by `github.token`.
 
-The workflow uses the sample [release pull-request template](.github/PULL_REQUEST_TEMPLATE/release.md). With `template-file`, the model reads the complete Markdown template, identifies the intended release-note section from its headings and instructions, inserts the generated notes there, and preserves unrelated sections such as approval checklists. A fixed marker is not required, so an existing repository-specific pull-request template can be used directly. The result is checked deterministically for complete notes, preserved template structure, and removed placeholder text. A second model review runs only when that validation fails.
+The workflow uses the sample [release pull-request template](.github/PULL_REQUEST_TEMPLATE/release.md). With `template-file`, the final writer reads the complete Markdown template, identifies the intended release-note section from its headings and instructions, writes the notes there, and preserves unrelated sections such as approval checklists. A fixed marker is not required, so an existing repository-specific pull-request template can be used directly. The generated pull-request body is intended for human review and editing before merge; the action does not spend additional model calls reviewing its own draft.
 
 ## Inputs
 
@@ -118,9 +118,9 @@ Reference an output from a later step with syntax such as `${{ steps.release-not
 
 Comparison tags use formats such as `v1.2.3`, `1.2.3`, and `v1.2.3-beta.1`. The model receives non-merge commit subjects and authors, changed-file statistics, and eligible text diffs.
 
-Generation is hierarchical. The action first builds a project profile from the repository tree, README files, and common project manifests. GitHub Actions caches that profile with an exact key derived from the file tree, selected context contents, model, and profile schema. It then analyzes complete diffs sequentially in related package or project-area groups. Lockfiles, generated output, binary files, and serialized Unity scenes/assets are interpreted from paths, statistics, commits, manifests, and related source changes instead of sending their bulk contents. The final writer consumes the detailed group analyses directly, avoiding a redundant consolidation pass. A second model review runs only when deterministic evidence-coverage validation of the first draft fails.
+The action uses two model stages in the normal path. First, it reads all complete text diffs together with commits, changed-file statistics, root documentation and manifests, and context files belonging to changed project areas. It extracts factual release-note candidates directly from that evidence without generating a separate project profile. Second, it organizes those candidates into final Markdown and, when `template-file` is set, writes them directly into the supplied template. It does not run model-based consolidation, validation, or self-review passes; the generated text is intended for human editing.
 
-The action does not impose a character or context-window input limit. It first sends each complete related change group to Ollama. Only when Ollama reports a context, token, or memory-capacity failure does the action split that same evidence and retry; no diff content is discarded.
+The action does not impose a character or context-window input limit. It first sends the complete relevant evidence to Ollama in one analysis request. Only when Ollama reports a context, token, or memory-capacity failure does the action split that same evidence and retry; no diff content is discarded and the partial candidate results are passed directly to the final writer.
 
 ### Compare release branches without version tags
 

@@ -1,58 +1,51 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  createAnalysisTasks,
   outputTokenBudget,
-  relatedGroup,
-  selectProjectContextFiles,
+  selectRelevantContextFiles,
   shouldAnalyzeAsMetadata,
   splitEvidence,
 } from '../src/analysis-plan.js';
 
 describe('change analysis planning', () => {
-  it('groups files from the same package and automation area', () => {
-    assert.equal(relatedGroup('packages/ai/src/analyzer.ts'), 'packages/ai');
-    assert.equal(relatedGroup('packages/ai/test/analyzer.spec.ts'), 'packages/ai');
-    assert.equal(relatedGroup('.github/workflows/release.yml'), '.github');
-    assert.equal(relatedGroup('README.md'), 'repository root');
-  });
-
-  it('combines related files without imposing a first-attempt size limit', () => {
-    const first = 'A'.repeat(1700);
-    const second = 'B'.repeat(900);
-    const tasks = createAnalysisTasks([
-      { filePath: 'packages/ai/src/a.ts', content: first },
-      { filePath: 'packages/ai/src/b.ts', content: second },
-    ]);
-
-    assert.equal(tasks.length, 1);
-    assert.match(tasks[0].evidence, new RegExp(`A{${first.length}}`));
-    assert.match(tasks[0].evidence, new RegExp(`B{${second.length}}`));
-  });
-
-  it('splits evidence only for capacity-error fallback without dropping content', () => {
+  it('splits rejected evidence without dropping content', () => {
     const evidence = Array.from({ length: 20 }, (_, index) => `line-${index}`).join('\n');
     const parts = splitEvidence(evidence);
     assert.equal(parts.join('\n'), evidence);
   });
 
-  it('recognizes files that should be inferred from metadata instead of full contents', () => {
+  it('recognizes files represented by metadata instead of bulk contents', () => {
     assert.equal(shouldAnalyzeAsMetadata('pnpm-lock.yaml'), true);
     assert.equal(shouldAnalyzeAsMetadata('Assets/Scenes/Main.unity'), true);
     assert.equal(shouldAnalyzeAsMetadata('dist/index.js'), true);
     assert.equal(shouldAnalyzeAsMetadata('src/index.ts'), false);
   });
 
-  it('selects manifests and documentation for project understanding', () => {
+  it('selects root context and context belonging to changed project areas', () => {
     assert.deepEqual(
-      selectProjectContextFiles(['src/index.ts', 'README.md', 'packages/app/package.json']),
-      ['README.md', 'packages/app/package.json']
+      selectRelevantContextFiles(
+        [
+          'README.md',
+          'package.json',
+          'packages/api/README.md',
+          'packages/api/package.json',
+          'packages/web/README.md',
+        ],
+        ['packages/api/src/index.ts']
+      ),
+      ['README.md', 'package.json', 'packages/api/README.md', 'packages/api/package.json']
     );
   });
 
-  it('keeps intermediate analysis concise while allowing longer final notes', () => {
-    assert.equal(outputTokenBudget('analysis-1/8-packages/source'), 768);
-    assert.equal(outputTokenBudget('project-profile'), 1024);
+  it('does not duplicate a context file already supplied as a diff', () => {
+    assert.deepEqual(selectRelevantContextFiles(['README.md', 'package.json'], ['README.md']), [
+      'package.json',
+    ]);
+  });
+
+  it('allows concise candidates and a complete templated final response', () => {
+    assert.equal(outputTokenBudget('change-analysis'), 2048);
     assert.equal(outputTokenBudget('final-release-notes'), 2048);
+    assert.equal(outputTokenBudget('final-release-notes-template'), 4096);
   });
 });
