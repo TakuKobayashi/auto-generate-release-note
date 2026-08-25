@@ -802,16 +802,29 @@ async function verifyOllama() {
       `Ollama at ${ollamaHost} returned HTTP ${response.status}. Check the server with 'ollama list' and restart it with 'ollama serve'.`
     );
   }
-  const result = await response.json();
-  const installedModel = (result.models || []).find(
-    (entry) => entry.name === model || entry.model === model
-  );
-  if (!installedModel) {
+  let showResponse;
+  try {
+    showResponse = await fetch(`${ollamaHost}/api/show`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+      signal: AbortSignal.timeout(5e3)
+    });
+  } catch (error) {
+    throw new Error(`Could not verify Ollama model '${model}'`, { cause: error });
+  }
+  if (!showResponse.ok) {
+    const details = await showResponse.text();
     throw new Error(
-      `Ollama model '${model}' is not installed. Install it with 'ollama pull ${model}' and retry.`
+      `Ollama model '${model}' is not available (${showResponse.status}): ${details || "no response body"}. Install it with 'ollama pull ${model}' and retry.`
     );
   }
-  const reportedContextLength = Number(installedModel.details?.context_length);
+  const modelDetails = await showResponse.json();
+  const reportedContextLength = Number(
+    modelDetails.details?.context_length || Object.entries(modelDetails.model_info || {}).find(
+      ([key]) => key.endsWith(".context_length")
+    )?.[1]
+  );
   modelContextLength = Number.isFinite(reportedContextLength) && reportedContextLength > 0 ? reportedContextLength : void 0;
   console.log(
     `Using ${modelContextLength || "Ollama's server-default"} context tokens reported for model '${model}'`

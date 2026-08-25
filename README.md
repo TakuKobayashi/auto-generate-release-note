@@ -48,6 +48,8 @@ jobs:
 
 `fetch-depth: 0` is required so the action can read previous tags and diffs. The workflow also needs `contents: write` permission to create or update a release.
 
+For official repository releases, set `fail-on-llm-error: 'true'` so a model installation or inference failure stops the workflow instead of publishing deterministic fallback notes. The included tag release workflow enables this behavior.
+
 On its first run, the action installs Ollama and the default model on a GitHub-hosted Linux runner. Model downloads and CPU inference can take time. For faster execution, use a self-hosted runner with Ollama already installed.
 
 ### Generate both Japanese and English

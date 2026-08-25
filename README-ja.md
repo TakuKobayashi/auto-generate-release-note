@@ -48,6 +48,8 @@ jobs:
 
 `fetch-depth: 0` は過去のタグと差分を取得するために必要です。ワークフローにはReleaseを書き込むための `contents: write` 権限も必要です。
 
+正式なRepository Releaseでは、モデルのインストールや推論に失敗したときにフォールバック文面を公開せずWorkflowを停止するため、`fail-on-llm-error: 'true'`を指定してください。同梱のタグRelease Workflowではこの設定を有効にしています。
+
 初回実行時、GitHub-hosted Linux runnerにはOllamaと既定モデルが自動インストールされます。モデルのダウンロードとCPU推論には時間がかかるため、Ollamaを用意したself-hosted runnerを使うと高速化できます。
 
 ### 日本語と英語の両方を生成する

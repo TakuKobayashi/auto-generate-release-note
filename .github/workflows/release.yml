@@ -60,6 +60,7 @@ jobs:
         with:
           tag: ${{ inputs.tag || github.ref_name }}
           language: en
+          fail-on-llm-error: 'true'
 
       - name: Show published release
         env:

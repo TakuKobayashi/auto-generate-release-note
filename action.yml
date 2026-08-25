@@ -107,11 +107,48 @@ runs:
         OLLAMA_HOST_URL: ${{ inputs.ollama-host }}
         OLLAMA_MODEL: ${{ inputs.model }}
       run: |
-        payload=$(node -e 'process.stdout.write(JSON.stringify({model: process.env.OLLAMA_MODEL}))')
-        curl --fail --show-error --silent \
+        payload=$(node -e 'process.stdout.write(JSON.stringify({model: process.env.OLLAMA_MODEL, stream: false}))')
+        pull_response="$RUNNER_TEMP/ai-release-notes-model-pull.json"
+        curl --show-error --silent \
           "$OLLAMA_HOST_URL/api/pull" \
           --header "Content-Type: application/json" \
-          --data "$payload" >/dev/null
+          --data "$payload" \
+          --output "$pull_response"
+        node -e '
+          const fs = require("node:fs");
+          const file = process.argv[1];
+          const body = fs.readFileSync(file, "utf8");
+          let result;
+          try { result = JSON.parse(body); }
+          catch { console.error(`Ollama returned invalid model-pull JSON: ${body}`); process.exit(1); }
+          if (result.error || result.status !== "success") {
+            console.error(`Ollama model pull failed: ${result.error || result.status || body}`);
+            process.exit(1);
+          }
+          console.log(`Ollama model pull completed: ${result.status}`);
+        ' "$pull_response"
+
+        show_payload=$(node -e 'process.stdout.write(JSON.stringify({model: process.env.OLLAMA_MODEL}))')
+        show_response="$RUNNER_TEMP/ai-release-notes-model-show.json"
+        for attempt in $(seq 1 15); do
+          curl --show-error --silent \
+            "$OLLAMA_HOST_URL/api/show" \
+            --header "Content-Type: application/json" \
+            --data "$show_payload" \
+            --output "$show_response"
+          if node -e '
+            const fs = require("node:fs");
+            const result = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            process.exit(result.error ? 1 : 0);
+          ' "$show_response"; then
+            echo "Ollama model is ready: $OLLAMA_MODEL"
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "Ollama model did not become available: $OLLAMA_MODEL" >&2
+        cat "$show_response" >&2
+        exit 1
 
     - name: Generate notes and publish GitHub Release
       id: release

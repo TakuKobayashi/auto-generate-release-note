@@ -16,6 +16,15 @@ describe('GitHub Action distribution', () => {
     assert.doesNotMatch(metadata, /num-ctx/);
   });
 
+  it('verifies model pulls and refuses fallback notes for repository releases', () => {
+    const metadata = readFileSync('action.yml', 'utf8');
+    const workflow = readFileSync('.github/workflows/release.yml', 'utf8');
+    assert.match(metadata, /stream: false/);
+    assert.match(metadata, /result\.status !== "success"/);
+    assert.match(metadata, /\/api\/show/);
+    assert.match(workflow, /fail-on-llm-error: 'true'/);
+  });
+
   it('uses one final model call over a locally built semantic digest', () => {
     const source = readFileSync('src/index.ts', 'utf8');
     assert.match(source, /Built local semantic digest/);
