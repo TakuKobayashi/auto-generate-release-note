@@ -43,9 +43,10 @@ describe('change analysis planning', () => {
     ]);
   });
 
-  it('allows concise candidates and a complete templated final response', () => {
-    assert.equal(outputTokenBudget('change-analysis'), 2048);
+  it('allows a compact evidence selection and a complete templated final response', () => {
+    assert.equal(outputTokenBudget('evidence-selection'), 1024);
     assert.equal(outputTokenBudget('final-release-notes'), 2048);
     assert.equal(outputTokenBudget('final-release-notes-template'), 4096);
+    assert.equal(outputTokenBudget('final-release-notes-template-capacity-retry'), 4096);
   });
 });

@@ -16,12 +16,14 @@ describe('GitHub Action distribution', () => {
     assert.doesNotMatch(metadata, /num-ctx/);
   });
 
-  it('uses only candidate extraction and final writing model stages', () => {
+  it('selects indexed evidence before direct final writing', () => {
     const source = readFileSync('src/index.ts', 'utf8');
-    assert.equal([...source.matchAll(/(?:await |return )runModel\(/g)].length, 2);
+    assert.match(source, /'evidence-selection'/);
+    assert.match(source, /Selected \$\{selectedEntries\.length\}\/\$\{entries\.length\}/);
+    assert.match(source, /buildTemplateReleaseNotesInstruction\(template, releaseName\)/);
     assert.doesNotMatch(
       source,
-      /project-profile|final-release-notes-review|release-template-review/
+      /project-profile|final-release-notes-review|release-template-review|change-analysis/
     );
     assert.doesNotMatch(readFileSync('action.yml', 'utf8'), /actions\/cache|profile-cache/);
   });
