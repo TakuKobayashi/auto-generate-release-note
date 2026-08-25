@@ -39,6 +39,7 @@ describe('GitHub Action distribution', () => {
       'tag',
       'release-name',
       'model',
+      'analysis-concurrency',
       'ollama-host',
       'language',
       'bilingual',
@@ -48,6 +49,7 @@ describe('GitHub Action distribution', () => {
       'output-file',
       'template-file',
     ]);
+    assert.match(metadata, /OLLAMA_NUM_PARALLEL: \$\{\{ inputs\.analysis-concurrency \}\}/);
   });
 
   it('runs the bundled CLI without TypeScript tooling', () => {

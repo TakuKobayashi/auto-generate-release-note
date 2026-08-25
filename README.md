@@ -91,6 +91,7 @@ The workflow uses the sample [release pull-request template](.github/PULL_REQUES
 | `tag`                       | No       | `${{ github.ref_name }}`    | Tag for the GitHub Release.                                    |
 | `release-name`              | No       | Value of `tag`              | Display name used in generated notes and the GitHub Release.   |
 | `model`                     | No       | `qwen2.5-coder:7b-instruct` | Ollama model used for generation.                              |
+| `analysis-concurrency`      | No       | `4`                         | Maximum concurrent independent change analyses.                |
 | `ollama-host`               | No       | `http://127.0.0.1:11434`    | Base URL of the Ollama API.                                    |
 | `language`                  | No       | `en`                        | Output language. Both `ja` and `jp` select Japanese.           |
 | `bilingual`                 | No       | `false`                     | Generates English and the selected language.                   |
@@ -114,7 +115,9 @@ Reference an output from a later step with syntax such as `${{ steps.release-not
 
 Comparison tags use formats such as `v1.2.3`, `1.2.3`, and `v1.2.3-beta.1`. The model receives non-merge commit subjects and authors, changed-file statistics, and eligible text diffs.
 
-Generation is hierarchical. The action first builds a project profile from the repository tree, README files, and common project manifests. It then analyzes complete diffs in related package or project-area groups. Lockfiles, generated output, binary files, and serialized Unity scenes/assets are interpreted from paths, statistics, commits, manifests, and related source changes instead of sending their bulk contents. Results are consolidated before the final release notes are written.
+Generation is hierarchical. The action first builds a project profile from the repository tree, README files, and common project manifests. It then analyzes complete diffs in related package or project-area groups, with up to four independent analyses running concurrently by default. Lockfiles, generated output, binary files, and serialized Unity scenes/assets are interpreted from paths, statistics, commits, manifests, and related source changes instead of sending their bulk contents. Results are consolidated before the final release notes are written.
+
+When the action starts a local Ollama server, `analysis-concurrency` also configures `OLLAMA_NUM_PARALLEL`. For an already-running or external `ollama-host`, configure server-side parallelism on that host separately; the input still limits concurrent client requests.
 
 The action does not impose a character or context-window input limit. It first sends each complete related change group to Ollama. Only when Ollama reports a context, token, or memory-capacity failure does the action split that same evidence and retry; no diff content is discarded.
 
@@ -136,6 +139,7 @@ node path/to/dist/index.js `
 Add `--tag v1.2.3` to preview an existing tag. Run `node dist/index.js --help` to see all options.
 For a future release, use `--tag HEAD --release-name v1.2.3` so Git comparison and the displayed release version remain separate.
 Add `--template-file .github/PULL_REQUEST_TEMPLATE/release.md` to generate a complete pull-request body from an existing Markdown template.
+Use `--analysis-concurrency 1` to force sequential analysis, or another positive integer to match the capacity of the Ollama host.
 
 ## Development
 
