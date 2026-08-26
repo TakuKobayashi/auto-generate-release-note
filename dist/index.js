@@ -321,6 +321,57 @@ function parseArgs(argv) {
   return options;
 }
 
+// src/commit-hints.ts
+function parseCommitCandidates(log) {
+  return log.split("\n").filter(Boolean).map((line) => {
+    const separator = line.indexOf("	");
+    return separator < 0 ? { hash: line, display: line } : { hash: line.slice(0, separator), display: line.slice(separator + 1) };
+  });
+}
+function extractAddedLineRanges(patch) {
+  const addedLines = [];
+  let targetLine;
+  for (const line of patch.split("\n")) {
+    const header = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (header) {
+      targetLine = Number(header[1]);
+      continue;
+    }
+    if (targetLine === void 0 || line.startsWith("\\")) continue;
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      addedLines.push(targetLine);
+      targetLine += 1;
+    } else if (!line.startsWith("-")) {
+      targetLine += 1;
+    }
+  }
+  const ranges = [];
+  for (const line of addedLines) {
+    const previous = ranges.at(-1);
+    if (previous && previous.end + 1 === line) previous.end = line;
+    else ranges.push({ start: line, end: line });
+  }
+  return ranges;
+}
+function buildSurvivingCommitHints(options) {
+  const available = new Set(options.commits.map(({ hash }) => hash));
+  const selected = /* @__PURE__ */ new Set();
+  const addHash = (hash) => {
+    const normalized = hash.replace(/^\^/, "");
+    if (available.has(normalized)) selected.add(normalized);
+  };
+  for (const patch of options.patches) {
+    const ranges = extractAddedLineRanges(patch.content);
+    if (ranges.length === 0) {
+      addHash(options.latestHash(patch.filePath));
+      continue;
+    }
+    for (const hash of options.blameHashes(patch.filePath, ranges)) addHash(hash);
+  }
+  for (const filePath of options.metadataFilePaths) addHash(options.latestHash(filePath));
+  return options.commits.filter(({ hash }) => selected.has(hash));
+}
+
 // src/ollama-request.ts
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -956,19 +1007,20 @@ async function runModel(userPrompt, stage, responseFormat) {
   );
   return result;
 }
-function finalReleaseNotesPrompt(comparisonBase, commits2, changedFiles2, excludedFiles2, contextDigest, semanticDigest) {
+function finalReleaseNotesPrompt(comparisonBase, commitHints, changedFiles2, excludedFiles2, contextDigest, semanticDigest) {
   const languageInstruction = shouldPublishBilingual ? `Write useful bilingual release notes for the single target release ${releaseName}. First write a complete English version under '# English', then an equivalent ${targetLanguage} translation under '# ${targetLanguage}', separated by a horizontal rule. Keep both versions semantically equivalent.` : `Write useful release notes in ${targetLanguage} only for the single target release ${releaseName}. Do not duplicate or translate the notes into another language.`;
   const outputInstruction = template ? buildTemplateReleaseNotesInstruction(template, releaseName) : "Return only the final Markdown release notes, without a code fence around the whole response.";
   return [
     languageInstruction,
     `The ref '${comparisonBase || "none"}' is only the comparison base; do not create a release section for it.`,
     "Use the local semantic digest to account for the complete change set. It describes every diff hunk without copying implementation bodies.",
-    "Commit subjects and file paths are supporting evidence, not guaranteed descriptions. Phrase ambiguous internal impact cautiously instead of requesting more source or performing a code review.",
+    "The commit hints include only commits tied to lines or metadata that survive in the final comparison. They remain supporting evidence, not guaranteed descriptions.",
+    "Never describe a feature from a commit hint unless the final semantic digest also supports it. Phrase ambiguous internal impact cautiously instead of requesting more source or performing a code review.",
     "Describe concrete user-visible changes, fixes, compatibility or migration needs, and useful maintainer changes. Merge evidence for the same underlying change and omit unsupported claims.",
     "Tests, documentation, manifests, and generated outputs may support an implementation change; do not present them as separate features unless they independently change user or maintainer behavior.",
     "",
-    `COMMITS:
-${commits2 || "No commit subjects are available."}`,
+    `SURVIVING COMMIT HINTS:
+${commitHints || "No commit subject was needed to explain the final state."}`,
     "",
     `CHANGED-FILE SUMMARY:
 ${changedFiles2 || "No changed-file statistics are available."}`,
@@ -986,7 +1038,7 @@ ${semanticDigest}`,
 ${outputInstruction}`
   ].join("\n");
 }
-async function generateWithModel(comparisonBase, commits2, changedFiles2, excludedFiles2, patches2, metadataChanges2, contextFiles) {
+async function generateWithModel(comparisonBase, commitHints, changedFiles2, excludedFiles2, patches2, metadataChanges2, contextFiles) {
   const entries = buildChangeIndex(patches2, metadataChanges2);
   const semanticDigest = formatChangeIndex(entries);
   const contextDigest = buildContextDigest(contextFiles);
@@ -997,7 +1049,7 @@ async function generateWithModel(comparisonBase, commits2, changedFiles2, exclud
   return runModel(
     finalReleaseNotesPrompt(
       comparisonBase,
-      commits2,
+      commitHints,
       changedFiles2,
       excludedFiles2,
       contextDigest,
@@ -1022,7 +1074,9 @@ var resolvedComparisonTarget = git("rev-parse", `${comparisonTargetRef}^{commit}
 console.log(
   `Git comparison: base=${comparisonBaseLabel || "<empty tree>"} (${resolvedComparisonBase || "none"}) target=${comparisonTarget} (${resolvedComparisonTarget}) mode=${usesExplicitComparison ? "explicit" : "semantic-tag"}`
 );
-var commits = git("log", range, "--no-merges", "--pretty=format:%h %s (%an)");
+var commitCandidates = parseCommitCandidates(
+  git("log", range, "--no-merges", "--pretty=format:%H%x09%h %s (%an)")
+);
 var changedFiles = git("diff", "--stat", diffBase, comparisonTargetRef);
 var changedFileNames = git("diff", "--name-only", "-z", diffBase, comparisonTargetRef).split("\0").filter(Boolean);
 var metadataFileNames = changedFileNames.filter(
@@ -1035,6 +1089,37 @@ var numStat = git("diff", "--numstat", diffBase, comparisonTargetRef);
 var excludedFiles = nameStatus.split("\n").filter((line) => excludedFileNames.includes(line.split("	").at(-1))).join("\n");
 var metadataChanges = [nameStatus, numStat].flatMap((value) => value.split("\n")).filter((line) => metadataFileNames.includes(line.split("	").at(-1))).join("\n");
 var patches = collectTextPatches(diffBase, comparisonTargetRef, textFiles);
+var survivingCommitHints = buildSurvivingCommitHints({
+  commits: commitCandidates,
+  patches,
+  metadataFilePaths: metadataFileNames,
+  blameHashes: (filePath, ranges) => {
+    try {
+      const blame = git(
+        "blame",
+        "--line-porcelain",
+        ...ranges.flatMap(({ start, end }) => ["-L", `${start},${end}`]),
+        comparisonTargetRef,
+        "--",
+        filePath
+      );
+      return [...blame.matchAll(/^([0-9a-f]{40}) \d+ \d+/gm)].map((match) => match[1]);
+    } catch {
+      return [];
+    }
+  },
+  latestHash: (filePath) => {
+    try {
+      return git("log", "-1", "--format=%H", range, "--", filePath);
+    } catch {
+      return "";
+    }
+  }
+});
+var commits = survivingCommitHints.map(({ display }) => display).join("\n");
+console.log(
+  `Selected ${survivingCommitHints.length}/${commitCandidates.length} commit hints tied to the final repository state`
+);
 var repositoryFiles = git("ls-tree", "-r", "--name-only", comparisonTargetRef).split("\n").filter(Boolean);
 var notes;
 var usedLlm = true;

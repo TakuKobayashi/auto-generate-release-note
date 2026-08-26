@@ -32,6 +32,8 @@ describe('GitHub Action distribution', () => {
     const source = readFileSync('src/index.ts', 'utf8');
     assert.match(source, /Built local semantic digest/);
     assert.match(source, /COMPLETE SEMANTIC CHANGE DIGEST/);
+    assert.match(source, /SURVIVING COMMIT HINTS/);
+    assert.doesNotMatch(source, /`COMMITS:/);
     assert.match(source, /buildTemplateReleaseNotesInstruction\(template, releaseName\)/);
     assert.doesNotMatch(
       source,

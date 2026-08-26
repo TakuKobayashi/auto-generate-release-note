@@ -8,6 +8,7 @@ import {
 } from './analysis-plan.js';
 import { buildChangeIndex, buildContextDigest, formatChangeIndex } from './change-index.js';
 import { helpText, parseArgs } from './cli.js';
+import { buildSurvivingCommitHints, parseCommitCandidates } from './commit-hints.js';
 import { requestOllamaChat } from './ollama-request.js';
 import { isReleaseTag } from './release-tags.js';
 import { buildTemplateReleaseNotesInstruction } from './release-template.js';
@@ -580,7 +581,7 @@ async function runModel(userPrompt, stage, responseFormat?) {
 
 function finalReleaseNotesPrompt(
   comparisonBase,
-  commits,
+  commitHints,
   changedFiles,
   excludedFiles,
   contextDigest,
@@ -596,11 +597,12 @@ function finalReleaseNotesPrompt(
     languageInstruction,
     `The ref '${comparisonBase || 'none'}' is only the comparison base; do not create a release section for it.`,
     'Use the local semantic digest to account for the complete change set. It describes every diff hunk without copying implementation bodies.',
-    'Commit subjects and file paths are supporting evidence, not guaranteed descriptions. Phrase ambiguous internal impact cautiously instead of requesting more source or performing a code review.',
+    'The commit hints include only commits tied to lines or metadata that survive in the final comparison. They remain supporting evidence, not guaranteed descriptions.',
+    'Never describe a feature from a commit hint unless the final semantic digest also supports it. Phrase ambiguous internal impact cautiously instead of requesting more source or performing a code review.',
     'Describe concrete user-visible changes, fixes, compatibility or migration needs, and useful maintainer changes. Merge evidence for the same underlying change and omit unsupported claims.',
     'Tests, documentation, manifests, and generated outputs may support an implementation change; do not present them as separate features unless they independently change user or maintainer behavior.',
     '',
-    `COMMITS:\n${commits || 'No commit subjects are available.'}`,
+    `SURVIVING COMMIT HINTS:\n${commitHints || 'No commit subject was needed to explain the final state.'}`,
     '',
     `CHANGED-FILE SUMMARY:\n${changedFiles || 'No changed-file statistics are available.'}`,
     '',
@@ -616,7 +618,7 @@ function finalReleaseNotesPrompt(
 
 async function generateWithModel(
   comparisonBase,
-  commits,
+  commitHints,
   changedFiles,
   excludedFiles,
   patches,
@@ -634,7 +636,7 @@ async function generateWithModel(
   return runModel(
     finalReleaseNotesPrompt(
       comparisonBase,
-      commits,
+      commitHints,
       changedFiles,
       excludedFiles,
       contextDigest,
@@ -671,7 +673,9 @@ const resolvedComparisonTarget = git('rev-parse', `${comparisonTargetRef}^{commi
 console.log(
   `Git comparison: base=${comparisonBaseLabel || '<empty tree>'} (${resolvedComparisonBase || 'none'}) target=${comparisonTarget} (${resolvedComparisonTarget}) mode=${usesExplicitComparison ? 'explicit' : 'semantic-tag'}`
 );
-const commits = git('log', range, '--no-merges', '--pretty=format:%h %s (%an)');
+const commitCandidates = parseCommitCandidates(
+  git('log', range, '--no-merges', '--pretty=format:%H%x09%h %s (%an)')
+);
 const changedFiles = git('diff', '--stat', diffBase, comparisonTargetRef);
 const changedFileNames = git('diff', '--name-only', '-z', diffBase, comparisonTargetRef)
   .split('\0')
@@ -692,6 +696,37 @@ const metadataChanges = [nameStatus, numStat]
   .filter((line) => metadataFileNames.includes(line.split('\t').at(-1)))
   .join('\n');
 const patches = collectTextPatches(diffBase, comparisonTargetRef, textFiles);
+const survivingCommitHints = buildSurvivingCommitHints({
+  commits: commitCandidates,
+  patches,
+  metadataFilePaths: metadataFileNames,
+  blameHashes: (filePath, ranges) => {
+    try {
+      const blame = git(
+        'blame',
+        '--line-porcelain',
+        ...ranges.flatMap(({ start, end }) => ['-L', `${start},${end}`]),
+        comparisonTargetRef,
+        '--',
+        filePath
+      );
+      return [...blame.matchAll(/^([0-9a-f]{40}) \d+ \d+/gm)].map((match) => match[1]);
+    } catch {
+      return [];
+    }
+  },
+  latestHash: (filePath) => {
+    try {
+      return git('log', '-1', '--format=%H', range, '--', filePath);
+    } catch {
+      return '';
+    }
+  },
+});
+const commits = survivingCommitHints.map(({ display }) => display).join('\n');
+console.log(
+  `Selected ${survivingCommitHints.length}/${commitCandidates.length} commit hints tied to the final repository state`
+);
 const repositoryFiles = git('ls-tree', '-r', '--name-only', comparisonTargetRef)
   .split('\n')
   .filter(Boolean);
