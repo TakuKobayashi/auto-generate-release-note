@@ -114,16 +114,16 @@ describe('GitHub Action distribution', () => {
     assert.doesNotMatch(workflow, /gh release create/);
   });
 
-  it('provides a merge-approved release PR workflow', () => {
+  it('creates and updates a pull request body from its branch comparison', () => {
     const workflow = readFileSync('.github/workflows/release-pr.yml', 'utf8');
-    assert.match(workflow, /pull_request:\s*\n\s*types: \[closed\]/);
-    assert.match(workflow, /github\.event\.pull_request\.merged == true/);
+    assert.match(workflow, /pull_request:\s*\n\s*types: \[opened, synchronize, reopened\]/);
     assert.match(workflow, /dry-run: 'true'/);
-    assert.match(workflow, /release-name: \$\{\{ inputs\.version \}\}/);
     assert.match(workflow, /template-file: \.github\/PULL_REQUEST_TEMPLATE\/release\.md/);
+    assert.match(workflow, /comparison-base: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
+    assert.match(workflow, /comparison-target: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
     assert.match(workflow, /gh pr create/);
-    assert.match(workflow, /APPROVED_NOTES: \$\{\{ github\.event\.pull_request\.body \}\}/);
-    assert.match(workflow, /gh release create/);
-    assert.doesNotMatch(workflow, /force/);
+    assert.match(workflow, /gh pr edit/);
+    assert.match(workflow, /source-branch:\s*\n\s*description: Branch to merge from/);
+    assert.match(workflow, /target-branch:\s*\n\s*description: Branch to merge into/);
   });
 });

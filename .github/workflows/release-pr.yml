@@ -1,121 +1,119 @@
-name: Release through pull request
+name: Create or update pull request
 
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: Release version (for example, v1.2.3)
+      source-branch:
+        description: Branch to merge from
+        required: true
+        type: string
+      target-branch:
+        description: Branch to merge into
         required: true
         type: string
   pull_request:
-    types: [closed]
+    types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
 
 jobs:
-  prepare-release-pr:
+  prepare-pull-request:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout default branch
+      - name: Checkout source branch
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ inputs['source-branch'] }}
           fetch-depth: 0
 
-      - name: Validate release request
+      - name: Validate pull request branches
         shell: bash
         env:
-          VERSION: ${{ inputs.version }}
+          SOURCE_BRANCH: ${{ inputs['source-branch'] }}
+          TARGET_BRANCH: ${{ inputs['target-branch'] }}
         run: |
-          if [[ ! "$VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid release version: $VERSION" >&2
+          if [[ "$SOURCE_BRANCH" == "$TARGET_BRANCH" ]]; then
+            echo "Source and target branches must be different" >&2
             exit 1
           fi
-          if git rev-parse --verify --quiet "refs/tags/$VERSION"; then
-            echo "Tag already exists: $VERSION" >&2
-            exit 1
-          fi
-          branch="release/$VERSION"
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-            echo "Release branch already exists: $branch" >&2
-            exit 1
-          fi
+          git rev-parse --verify "origin/$SOURCE_BRANCH^{commit}" >/dev/null
+          git rev-parse --verify "origin/$TARGET_BRANCH^{commit}" >/dev/null
 
-      - name: Generate release notes for review
+      - name: Resolve pull request comparison
+        id: comparison
+        shell: bash
+        env:
+          SOURCE_BRANCH: ${{ inputs['source-branch'] }}
+          TARGET_BRANCH: ${{ inputs['target-branch'] }}
+        run: |
+          echo "base=$TARGET_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "head=$SOURCE_BRANCH" >> "$GITHUB_OUTPUT"
+          base_sha="$(git rev-parse "origin/$TARGET_BRANCH^{commit}")"
+          head_sha="$(git rev-parse "origin/$SOURCE_BRANCH^{commit}")"
+          echo "base-sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "head-sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Generate pull request body from the branch difference
         uses: ./
         with:
-          tag: HEAD
-          release-name: ${{ inputs.version }}
+          comparison-base: ${{ steps.comparison.outputs.base-sha }}
+          comparison-target: ${{ steps.comparison.outputs.head-sha }}
+          release-name: ${{ steps.comparison.outputs.head }} into ${{ steps.comparison.outputs.base }}
           language: en
           dry-run: 'true'
           fail-on-llm-error: 'true'
           template-file: .github/PULL_REQUEST_TEMPLATE/release.md
-          output-file: ${{ runner.temp }}/release-notes.md
+          output-file: ${{ runner.temp }}/pull-request-body.md
 
-      - name: Create release pull request
+      - name: Create or update pull request
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          NOTES_FILE: ${{ runner.temp }}/release-notes.md
+          SOURCE_BRANCH: ${{ steps.comparison.outputs.head }}
+          TARGET_BRANCH: ${{ steps.comparison.outputs.base }}
+          NOTES_FILE: ${{ runner.temp }}/pull-request-body.md
         run: |
-          branch="release/$VERSION"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -c "$branch"
-          git commit --allow-empty -m "Prepare release $VERSION"
-          git push origin "$branch"
-          gh pr create \
-            --base "$DEFAULT_BRANCH" \
-            --head "$branch" \
-            --title "Release $VERSION" \
-            --body-file "$NOTES_FILE"
+          pr_number="$(gh pr list --state open --base "$TARGET_BRANCH" --head "$SOURCE_BRANCH" --json number --jq '.[0].number // empty')"
+          if [[ -n "$pr_number" ]]; then
+            gh pr edit "$pr_number" \
+              --body-file "$NOTES_FILE"
+          else
+            gh pr create \
+              --base "$TARGET_BRANCH" \
+              --head "$SOURCE_BRANCH" \
+              --title "Merge $SOURCE_BRANCH into $TARGET_BRANCH" \
+              --body-file "$NOTES_FILE"
+          fi
 
-  publish-approved-release:
-    if: >-
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.merged == true &&
-      startsWith(github.event.pull_request.head.ref, 'release/')
+  update-pull-request:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout approved merge commit
+      - name: Checkout pull request revision
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
-      - name: Publish approved release notes
+      - name: Generate pull request body from the branch difference
+        uses: ./
+        with:
+          comparison-base: ${{ github.event.pull_request.base.sha }}
+          comparison-target: ${{ github.event.pull_request.head.sha }}
+          release-name: ${{ github.event.pull_request.title }}
+          language: en
+          dry-run: 'true'
+          fail-on-llm-error: 'true'
+          template-file: .github/PULL_REQUEST_TEMPLATE/release.md
+          output-file: ${{ runner.temp }}/pull-request-body.md
+
+      - name: Update pull request body
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-          APPROVED_NOTES: ${{ github.event.pull_request.body }}
-          NOTES_FILE: ${{ runner.temp }}/approved-release-notes.md
-        run: |
-          version="${HEAD_REF#release/}"
-          if [[ ! "$version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid release branch: $HEAD_REF" >&2
-            exit 1
-          fi
-          if [[ -z "$APPROVED_NOTES" ]]; then
-            echo "The approved pull request body is empty" >&2
-            exit 1
-          fi
-          if git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null 2>&1; then
-            echo "Tag already exists: $version" >&2
-            exit 1
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$version" "$MERGE_SHA" -m "$version"
-          git push origin "refs/tags/$version"
-          printf '%s\n' "$APPROVED_NOTES" > "$NOTES_FILE"
-          gh release create "$version" \
-            --verify-tag \
-            --title "$version" \
-            --notes-file "$NOTES_FILE"
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          NOTES_FILE: ${{ runner.temp }}/pull-request-body.md
+        run: gh pr edit "$PR_NUMBER" --body-file "$NOTES_FILE"
