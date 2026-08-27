@@ -57,7 +57,7 @@ jobs:
           echo "head-sha=$head_sha" >> "$GITHUB_OUTPUT"
 
       - name: Generate pull request body from the branch difference
-        uses: ./
+        uses: TakuKobayashi/auto-generate-release-note@v2
         with:
           comparison-base: ${{ steps.comparison.outputs.base-sha }}
           comparison-target: ${{ steps.comparison.outputs.head-sha }}
@@ -99,7 +99,7 @@ jobs:
           fetch-depth: 0
 
       - name: Generate pull request body from the branch difference
-        uses: ./
+        uses: TakuKobayashi/auto-generate-release-note@v2
         with:
           comparison-base: ${{ github.event.pull_request.base.sha }}
           comparison-target: ${{ github.event.pull_request.head.sha }}
