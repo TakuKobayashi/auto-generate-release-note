@@ -148,7 +148,7 @@ npm run verify
 
 1. このリポジトリをGitHub上でPublicにします。
 2. 変更をmainブランチへpushします。
-3. `v1`、`v1.0.0` のようなタグを作成してpushします。
+3. `v2.0.1` のような完全なバージョンタグを作成してpushします。
 4. Releaseワークフローがフォーマット、型、ビルド、spec、配布ファイルを検証します。その後、このAction自身を実行してOllamaでリリースノートを生成し、生成されたMarkdownを本文にしたGitHub Releaseを作成または更新します。タグをpushした時点で `TakuKobayashi/auto-generate-release-note@v2` のように利用できます。
 5. Marketplaceへ初めて掲載するときだけ、作成されたReleaseをGitHub上で編集し、**Publish this Action to the GitHub Marketplace** を選択します。
 6. カテゴリ（例: Utilities）を選んで更新します。初回はMarketplace Developer Agreementへの同意と2要素認証が必要です。
@@ -157,11 +157,21 @@ GitHubの公開APIにはMarketplace掲載チェックを設定する項目がな
 
 既存タグのリリースノートを再生成する場合は、**Actions → Release → Run workflow** を開き、対象タグを入力して実行します。既存Releaseの本文が、新しく生成された内容へ更新されます。
 
+### Actionのバージョンタグ
+
+`v2.0.1` は内容を固定するRelease用タグ、`v2` は最新の互換性があるv2系を指す追従タグです。MarketplaceでReleaseを公開しても `v2` は自動作成されないため、Releaseの成功後に別途作成・更新します。
+
 ```bash
-git tag -a v1.0.0 -m "v1.0.0"
-git tag -a v1 -m "v1"
-git push origin v1.0.0 v1
+# 固定バージョンを公開
+git tag -a v2.0.2 -m "v2.0.2"
+git push origin v2.0.2
+
+# v2利用者を最新の互換バージョンへ更新
+git tag -fa v2 "v2.0.2^{}" -m "v2"
+git push origin v2 --force
 ```
+
+破壊的変更を含む `v3.0.0` を公開するときは新しく `v3` を作り、`v2` は最新のv2系を指す状態で残します。詳しくはGitHub公式の[カスタムActionを管理する](https://docs.github.com/en/actions/how-tos/create-and-publish-actions/manage-custom-actions#using-tags-for-release-management)を参照してください。
 
 Action名はMarketplace全体で一意である必要があります。公開画面で競合が表示された場合は、`action.yml` の `name` を変更してください。
 

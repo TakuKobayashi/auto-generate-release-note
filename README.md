@@ -166,7 +166,7 @@ npm run verify
 
 1. Make this repository public on GitHub.
 2. Push the changes to the `main` branch.
-3. Create and push a tag such as `v1` or `v1.0.0`.
+3. Create and push a full version tag such as `v2.0.1`.
 4. The Release workflow validates formatting, types, the build, specs, and the committed distribution. It then runs this action itself, generates release notes with Ollama, and creates or updates the GitHub Release with the generated Markdown. Once the tag is pushed, the action can be used as `TakuKobayashi/auto-generate-release-note@v2`.
 5. For the first Marketplace publication only, edit the generated release on GitHub and select **Publish this Action to the GitHub Marketplace**.
 6. Select a category such as Utilities and update the release. The first publication requires acceptance of the Marketplace Developer Agreement and two-factor authentication.
@@ -175,11 +175,21 @@ The public GitHub API does not expose the Marketplace publication checkbox, so s
 
 To regenerate the notes for an existing tag, open **Actions → Release → Run workflow**, enter the tag, and run the workflow. The existing release body will be replaced with newly generated notes.
 
+### Action version tags
+
+`v2.0.1` is a fixed release tag, while `v2` is a moving tag that points to the latest compatible v2 release. Publishing a Marketplace release does not create `v2` automatically, so create or update it separately after the full release succeeds.
+
 ```bash
-git tag -a v1.0.0 -m "v1.0.0"
-git tag -a v1 -m "v1"
-git push origin v1.0.0 v1
+# Publish the fixed version
+git tag -a v2.0.2 -m "v2.0.2"
+git push origin v2.0.2
+
+# Move v2 users to the latest compatible release
+git tag -fa v2 "v2.0.2^{}" -m "v2"
+git push origin v2 --force
 ```
+
+For a breaking `v3.0.0` release, create a new `v3` moving tag and leave `v2` pointing to the latest v2 release. See GitHub's [Managing custom actions](https://docs.github.com/en/actions/how-tos/create-and-publish-actions/manage-custom-actions#using-tags-for-release-management) documentation for the recommended policy.
 
 The action name must be unique across GitHub Marketplace. If GitHub reports a conflict during publication, update `name` in `action.yml`.
 
